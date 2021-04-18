@@ -1,0 +1,10 @@
+[package]
+name = "fin"
+version = "0.1.0"
+authors = ["Ian Graham Martinez <Ian.graham28@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+strum = "0.20"
+strum_macros = "0.20"
+clap = "2.33"
