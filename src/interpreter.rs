@@ -1,12 +1,12 @@
 use super::bytecode::*;
 
-pub struct FinProgram {
-	program_data: Vec<Word>,
-	code: Vec<Instruction>,
+pub(crate) struct FinProgram {
+	pub(crate) program_data: Vec<Word>,
+	pub(crate) code: Vec<Instruction>,
 }
 
 impl FinProgram {
-	pub fn new(bytecode: &[u8]) -> Self {
+	pub(crate) fn new(bytecode: &[u8]) -> Self {
 		use std::convert::TryInto;
 		let data_size = Word::from_le_bytes(bytecode[0..8].try_into().unwrap());
 		Self {
@@ -21,7 +21,7 @@ impl FinProgram {
 		}
 	}
 
-	pub fn execute(&mut self) {
+	pub(crate) fn execute(&self) {
 		let mut data = Data {
 			program_data: self.program_data.clone(),
 			stack: vec![],
@@ -35,19 +35,75 @@ impl FinProgram {
 				match instruction.mnemonic {
 					Dbg => println!("{:?}\n{:?}", &reg, &data),
 					Inc => *reg.write_gp(instruction.args[0]) += 1,
+					Load => {
+						*reg.write_gp(instruction.args[1]) =
+							data.read_addr(reg.read_gp(instruction.args[0]))
+					}
+					Const => {
+						use std::convert::TryInto;
+						*reg.write_gp(instruction.args[0]) =
+							(u32::from_le_bytes(instruction.args[2..6].try_into().unwrap()) as u64)
+								<< (instruction.args[1] as u64);
+					}
+					Store => {
+						*data.write_addr(reg.read_gp(instruction.args[1])) =
+							reg.read_gp(instruction.args[0])
+					}
 					Push => data.stack.push(reg.read_gp(instruction.args[0])),
+					PushAll => {
+						for i in instruction.args[0]..instruction.args[1] {
+							data.stack.push(reg.read_gp(i));
+						}
+					}
 					Pop => {
 						*reg.write_gp(instruction.args[0]) = data.stack.pop().expect("Empty stack");
 					}
-					Puts => {}
-					Nop => {}
+					PopAll => {
+						for i in instruction.args[0]..instruction.args[1] {
+							*reg.write_gp(i) = data.stack.pop().expect("Empty stack");
+						}
+					}
+					Puts => {
+						unimplemented!()
+					}
+					Or => {
+						*reg.write_gp(instruction.args[0]) =
+							reg.read_gp(instruction.args[1]) | reg.read_gp(instruction.args[2]);
+					}
+					Xor => {
+						*reg.write_gp(instruction.args[0]) =
+							reg.read_gp(instruction.args[1]) ^ reg.read_gp(instruction.args[2]);
+					}
+					Add => {
+						*reg.write_gp(instruction.args[0]) = reg
+							.read_gp(instruction.args[1])
+							.wrapping_add(reg.read_gp(instruction.args[2]));
+					}
+					Sub => {
+						*reg.write_gp(instruction.args[0]) = reg
+							.read_gp(instruction.args[1])
+							.wrapping_sub(reg.read_gp(instruction.args[2]));
+					}
+					Mul => {
+						*reg.write_gp(instruction.args[0]) = reg
+							.read_gp(instruction.args[1])
+							.wrapping_mul(reg.read_gp(instruction.args[2]));
+					}
+					Div => {
+						*reg.write_gp(instruction.args[0]) =
+							(reg.read_gp(instruction.args[1]) as i64
+								/ reg.read_gp(instruction.args[2]) as i64) as u64;
+					}
+					Mov => {
+						*reg.write_gp(instruction.args[1]) = reg.read_gp(instruction.args[0]);
+					}
 				}
 			}
 			reg.ip += 1;
 		}
 	}
 
-	pub fn assemble(mut input: String) -> Self {
+	pub(crate) fn assemble(mut input: String) -> Self {
 		use std::str::FromStr;
 		let code = input.split_off(input.find(']').expect("Invalid program data format"));
 		input.retain(|c| !c.is_whitespace());
@@ -75,7 +131,7 @@ impl FinProgram {
 		}
 	}
 
-	pub fn dissassemble(&self) -> String {
+	pub(crate) fn dissassemble(&self) -> String {
 		let mut output = String::from("[\n");
 		for word in &self.program_data {
 			output += &word.to_string();
@@ -91,7 +147,7 @@ impl FinProgram {
 		output
 	}
 
-	pub fn to_raw(&self) -> Vec<u8> {
+	pub(crate) fn to_raw(&self) -> Vec<u8> {
 		let mut output = vec![];
 		output.extend_from_slice(&(self.program_data.len() as Word).to_le_bytes());
 		for word in &self.program_data {
@@ -146,7 +202,7 @@ impl Registers {
 		self.gp[register as usize]
 	}
 
-	fn write_gp(& mut self, register: u8) -> &mut Word {
+	fn write_gp(&mut self, register: u8) -> &mut Word {
 		assert!(register < 16);
 		&mut self.gp[register as usize]
 	}
@@ -154,8 +210,8 @@ impl Registers {
 
 #[derive(Debug)]
 struct Data {
-	pub program_data: Vec<Word>,
-	pub stack: Vec<Word>,
+	pub(crate) program_data: Vec<Word>,
+	pub(crate) stack: Vec<Word>,
 }
 
 impl Data {

@@ -1,17 +1,17 @@
 use strum::EnumCount;
 use strum_macros::{EnumCount, EnumString, ToString};
 
-pub type Word = u64;
+pub(crate) type Word = u64;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Instruction {
-	pub condition: Condition,
-	pub mnemonic: Mnemonic,
-	pub args: [u8; 6],
+pub(crate) struct Instruction {
+	pub(crate) condition: Condition,
+	pub(crate) mnemonic: Mnemonic,
+	pub(crate) args: [u8; 6],
 }
 
 impl Instruction {
-	pub fn from_raw(instruction: &[u8; 8]) -> Self {
+	pub(crate) fn from_raw(instruction: &[u8; 8]) -> Self {
 		use std::convert::TryInto;
 		use std::mem::transmute;
 		assert!((instruction[0] as usize) < Condition::COUNT);
@@ -23,7 +23,7 @@ impl Instruction {
 		}
 	}
 
-	pub fn to_raw(&self) -> Word {
+	pub(crate) fn to_raw(&self) -> Word {
 		let mut bytes = [0u8; 8];
 		bytes[0] = self.condition as u8;
 		bytes[1] = self.mnemonic as u8;
@@ -31,9 +31,9 @@ impl Instruction {
 		Word::from_le_bytes(bytes)
 	}
 
-	pub fn as_string(&self) -> String {
+	pub(crate) fn as_string(&self) -> String {
 		format!(
-			"{:5}\t{:5}\t[{}, {}, {}, {}, {}, {}]",
+			"{:8} {:8} [{}, {}, {}, {}, {}, {}]",
 			self.condition.to_string(),
 			self.mnemonic.to_string(),
 			self.args[0],
@@ -45,7 +45,7 @@ impl Instruction {
 		)
 	}
 
-	pub fn from_string(mut input: String) -> Self {
+	pub(crate) fn from_string(mut input: String) -> Self {
 		use std::convert::TryInto;
 		use std::iter::repeat;
 		use std::str::FromStr;
@@ -82,7 +82,7 @@ impl Instruction {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
 #[repr(u8)]
-pub enum Condition {
+pub(crate) enum Condition {
 	Al = 0,
 	Eq,
 	NEq,
@@ -99,11 +99,39 @@ pub enum Condition {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
 #[repr(u8)]
-pub enum Mnemonic {
-	Nop = 0,
-	Dbg,
+pub(crate) enum Mnemonic {
+	//Print debug info
+	Dbg = 0,
+	//Increment value in registers[args[0]]
 	Inc,
+	//Load args[2..6] as little endian u32, left shifted by args[1] into registers[args[0]]
+	Const,
+	//registers[args[0]] = registers[data[args[0]]]
+	Load,
+	//data[registers[args[0]]] = registers[args[0]]
+	Store,
+	//Pop off stack into registers[args[0]]
 	Pop,
+	//Restore all registers in range args[0]..args[1] from stack
+	PopAll,
+	//Push registers[args[0]] onto stack
 	Push,
+	//Push all registers in range args[0]..args[1] from stack
+	PushAll,
+	//Print string stored at data[register[args[0]]]
 	Puts,
+	//Or registers[args[1]] and registers[args[2]] into registers[args[0]]
+	Or,
+	//Xor registers[args[1]] and registers[args[2]] into registers[args[0]]
+	Xor,
+	//Add registers[args[1]] and registers[args[2]] into registers[args[0]]
+	Add,
+	//Subtract registers[args[2]] from registers[args[1]] into registers[args[0]]
+	Sub,
+	//Integer multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
+	Mul,
+	//Integer divide registers[args[2]] by registers[args[1]] into registers[args[0]]
+	Div,
+	//Move registers[args[0]] into registers[args[1]]
+	Mov,
 }
