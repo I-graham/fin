@@ -1,5 +1,7 @@
 use super::bytecode::*;
 
+pub const REGISTERS: u8 = 16;
+
 pub(crate) struct FinProgram {
 	pub(crate) program_data: Vec<Word>,
 	pub(crate) code: Vec<Instruction>,
@@ -26,9 +28,9 @@ impl FinProgram {
 			program_data: self.program_data.clone(),
 			stack: vec![],
 		};
-		let mut reg = Registers::default();
+		let mut reg = RegisterData::default();
 
-		while reg.ip < self.code.len() as u32 {
+		while reg.ip < self.code.len() as Word {
 			let instruction = self.code[reg.ip as usize];
 			if reg.cond_matches(instruction.condition) {
 				use Mnemonic::*;
@@ -39,14 +41,22 @@ impl FinProgram {
 						*reg.write_gp(instruction.args[1]) =
 							data.read_addr(reg.read_gp(instruction.args[0]))
 					}
+					StkLd => {
+						*reg.write_gp(instruction.args[1]) =
+							data.read_addr(reg.bp + reg.read_gp(instruction.args[0]))
+					}
 					Const => {
 						use std::convert::TryInto;
 						*reg.write_gp(instruction.args[0]) =
-							(u32::from_le_bytes(instruction.args[2..6].try_into().unwrap()) as u64)
-								<< (instruction.args[1] as u64);
+							(u32::from_le_bytes(instruction.args[2..6].try_into().unwrap())
+								as Word) << (instruction.args[1] as Word);
 					}
 					Store => {
 						*data.write_addr(reg.read_gp(instruction.args[1])) =
+							reg.read_gp(instruction.args[0])
+					}
+					StkStr => {
+						*data.write_addr(reg.bp + reg.read_gp(instruction.args[1])) =
 							reg.read_gp(instruction.args[0])
 					}
 					Push => data.stack.push(reg.read_gp(instruction.args[0])),
@@ -92,10 +102,13 @@ impl FinProgram {
 					Div => {
 						*reg.write_gp(instruction.args[0]) =
 							(reg.read_gp(instruction.args[1]) as i64
-								/ reg.read_gp(instruction.args[2]) as i64) as u64;
+								/ reg.read_gp(instruction.args[2]) as i64) as Word;
 					}
 					Mov => {
 						*reg.write_gp(instruction.args[1]) = reg.read_gp(instruction.args[0]);
+					}
+					Hlt => {
+						std::process::exit(reg.read_gp(instruction.args[0]) as i32);
 					}
 				}
 			}
@@ -112,7 +125,7 @@ impl FinProgram {
 				.split(',')
 				.filter_map(|num| {
 					if !num.is_empty() {
-						Some(u64::from_str(num).expect("Invalid Number"))
+						Some(Word::from_str(num).expect("Invalid Number"))
 					} else {
 						None
 					}
@@ -137,11 +150,16 @@ impl FinProgram {
 			output += &word.to_string();
 			output += ",\n";
 		}
-		output += "]\n";
+		output += "]\n\n";
 
-		for instruction in &self.code {
-			output += &instruction.as_string();
-			output += ";\n";
+		let width = (self.code.len() as f64).log10().round() as usize + 1;
+		for (i, instruction) in self.code.iter().enumerate() {
+			output += &format!(
+				"{:>width$}| {};\n",
+				i,
+				&instruction.as_string(),
+				width = width
+			);
 		}
 
 		output
@@ -154,20 +172,21 @@ impl FinProgram {
 			output.extend(&word.to_le_bytes());
 		}
 		for inst in &self.code {
-			output.extend(&inst.to_raw().to_le_bytes());
+			output.extend(&inst.as_raw().to_le_bytes());
 		}
 		output
 	}
 }
 
 #[derive(Debug, Default)]
-struct Registers {
-	ip: u32,
+struct RegisterData {
+	ip: Word,
+	bp: Word,
 	cmp: u8,
-	gp: [Word; 16],
+	gp: [Word; REGISTERS as usize],
 }
 
-impl Registers {
+impl RegisterData {
 	const GREATER_MASK: u8 = 1 << 0;
 	const LESS_MASK: u8 = 1 << 1;
 	const EQ_MASK: u8 = 1 << 2;
@@ -198,12 +217,12 @@ impl Registers {
 	}
 
 	fn read_gp(&self, register: u8) -> Word {
-		assert!(register < 16);
+		assert!(register < REGISTERS);
 		self.gp[register as usize]
 	}
 
 	fn write_gp(&mut self, register: u8) -> &mut Word {
-		assert!(register < 16);
+		assert!(register < REGISTERS);
 		&mut self.gp[register as usize]
 	}
 }
@@ -217,26 +236,26 @@ struct Data {
 impl Data {
 	fn read_addr(&self, address: Word) -> Word {
 		//If the first bit is a 1, then the value is fetched from program_data
-		let program_data_bit = address & (1 << 63);
+		let program_data_bit = address & (1 << (Word::BITS - 1));
 
 		if program_data_bit != 0 {
-			assert!(address < self.program_data.len() as u64);
+			assert!(address < self.program_data.len() as Word);
 			self.program_data[(address & !program_data_bit) as usize]
 		} else {
-			assert!(address < self.stack.len() as u64);
+			assert!(address < self.stack.len() as Word);
 			self.stack[address as usize]
 		}
 	}
 
 	fn write_addr(&mut self, address: Word) -> &mut Word {
 		//If the first bit is a 1, then the value written to is in program_data
-		let program_data_bit = address & (1 << 63);
+		let program_data_bit = address & (1 << (Word::BITS - 1));
 
 		if program_data_bit != 0 {
-			assert!(address < self.program_data.len() as u64);
+			assert!(address < self.program_data.len() as Word);
 			&mut self.program_data[(address & !program_data_bit) as usize]
 		} else {
-			assert!(address < self.stack.len() as u64);
+			assert!(address < self.stack.len() as Word);
 			&mut self.stack[address as usize]
 		}
 	}

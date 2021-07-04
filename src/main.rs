@@ -6,7 +6,7 @@ use clap::{App, Arg, SubCommand};
 use interpreter::*;
 
 fn main() {
-	let matches = App::new("fin")
+	let app = App::new("fin")
 		.version("1.0")
 		.author("Ian Graham Martinez <ian.graham28@gmail.com>")
 		.about("Interpreter for Fin bytecode to which SharkFin compiles.")
@@ -61,8 +61,9 @@ fn main() {
 						.long("output")
 						.takes_value(true),
 				),
-		])
-		.get_matches();
+		]);
+
+	let matches = app.clone().get_matches();
 
 	use std::fs::{read, read_to_string, write};
 	if let Some(matches) = matches.subcommand_matches("run") {
@@ -94,6 +95,6 @@ fn main() {
 		)
 		.expect("Unable to output file");
 	} else {
-		unreachable!();
+		app.clone().print_help().expect("");
 	}
 }

@@ -1,7 +1,7 @@
 use strum::EnumCount;
 use strum_macros::{EnumCount, EnumString, ToString};
 
-pub(crate) type Word = u64;
+pub type Word = u64;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Instruction {
@@ -23,7 +23,7 @@ impl Instruction {
 		}
 	}
 
-	pub(crate) fn to_raw(&self) -> Word {
+	pub(crate) fn as_raw(&self) -> Word {
 		let mut bytes = [0u8; 8];
 		bytes[0] = self.condition as u8;
 		bytes[1] = self.mnemonic as u8;
@@ -100,38 +100,44 @@ pub(crate) enum Condition {
 #[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
 #[repr(u8)]
 pub(crate) enum Mnemonic {
-	//Print debug info
 	Dbg = 0,
-	//Increment value in registers[args[0]]
+	//Print debug info
 	Inc,
-	//Load args[2..6] as little endian u32, left shifted by args[1] into registers[args[0]]
+	//Increment value in registers[args[0]]
 	Const,
-	//registers[args[0]] = registers[data[args[0]]]
+	//Load args[2..5] as little endian u32, left shifted by args[1] into registers[args[0]]
 	Load,
-	//data[registers[args[0]]] = registers[args[0]]
+	//registers[args[1]] = data[registers[args[0]]]
+	StkLd,
+	//registers[args[1]] = data[registers[args[0]] + base pointer]
 	Store,
-	//Pop off stack into registers[args[0]]
+	//data[registers[args[1]]] = registers[args[0]]
+	StkStr,
+	//data[registers[args[1]]+base pointer] = registers[args[0]]
 	Pop,
-	//Restore all registers in range args[0]..args[1] from stack
+	//Pop off stack into registers[args[0]]
 	PopAll,
-	//Push registers[args[0]] onto stack
+	//Restore all registers in range args[0]..args[1] from stack
 	Push,
-	//Push all registers in range args[0]..args[1] from stack
+	//Push registers[args[0]] onto stack
 	PushAll,
-	//Print string stored at data[register[args[0]]]
+	//Push all registers in range args[0]..args[1] from stack
 	Puts,
-	//Or registers[args[1]] and registers[args[2]] into registers[args[0]]
+	//Print string stored at data[register[args[0]]]
 	Or,
-	//Xor registers[args[1]] and registers[args[2]] into registers[args[0]]
+	//Or registers[args[1]] and registers[args[2]] into registers[args[0]]
 	Xor,
-	//Add registers[args[1]] and registers[args[2]] into registers[args[0]]
+	//Xor registers[args[1]] and registers[args[2]] into registers[args[0]]
 	Add,
-	//Subtract registers[args[2]] from registers[args[1]] into registers[args[0]]
+	//Add registers[args[1]] and registers[args[2]] into registers[args[0]]
 	Sub,
-	//Integer multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
+	//Subtract registers[args[2]] from registers[args[1]] into registers[args[0]]
 	Mul,
-	//Integer divide registers[args[2]] by registers[args[1]] into registers[args[0]]
+	//Integer multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Div,
-	//Move registers[args[0]] into registers[args[1]]
+	//Integer divide registers[args[2]] by registers[args[1]] into registers[args[0]]
 	Mov,
+	//Move registers[args[0]] into registers[args[1]]
+	Hlt,
+	//Exit program with return value registers[args[0]] as i32
 }

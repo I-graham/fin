@@ -1,3 +1,5 @@
+use crate::bytecode::Word;
+
 pub(crate) struct Lexer<'a> {
 	source: &'a str,
 	cursor: usize,
@@ -9,33 +11,52 @@ impl<'a> Lexer<'a> {
 	}
 
 	pub(crate) fn advance_token(&mut self) -> Option<Token<'a>> {
-		if let Some(next_char) = self.remaining().chars().next() {
-			Some(match next_char {
-				'+' => Token(TokenKind::Plus, self.advance_source("+")),
-				'-' => Token(TokenKind::Minus, self.advance_source("-")),
-				'*' => Token(TokenKind::Mul, self.advance_source("*")),
-				'/' => Token(TokenKind::Div, self.advance_source("/")),
-				'(' => Token(TokenKind::LParen, self.advance_source("(")),
-				')' => Token(TokenKind::RParen, self.advance_source(")")),
-				'p' if self.source.starts_with("proc") => {
-					Token(TokenKind::Proc, self.advance_source("proc"))
-				}
+		use TokenKind::*;
+		const EXACT_TOKENS: &[(&str, TokenKind)] = &[
+			(";", Semicolon),
+			("+", Plus),
+			("-", Minus),
+			("*", Mul),
+			("/", Div),
+			("(", LParen),
+			(")", RParen),
+			("==", Eq),
+			("=", Assign),
+			("let", Let),
+			("proc", Proc),
+		];
+
+		for (string, kind) in EXACT_TOKENS {
+			if self.remaining().starts_with(string) {
+				return Some(Token(*kind, self.advance_source(string)));
+			}
+		}
+
+		self.remaining()
+			.chars()
+			.next()
+			.map(|next_char| match next_char {
 				d if d.is_digit(10) => {
 					let num_str = self.advance_until_char(|d| !d.is_digit(10));
-					match u64::from_str_radix(num_str, 10) {
+					match Word::from_str_radix(num_str, 10) {
 						Ok(_) => Token(TokenKind::Integer, num_str),
 						Err(err) => self.syntax_error(err),
 					}
 				}
+				c if c.is_alphabetic() && c.is_lowercase() => Token(
+					TokenKind::Ident,
+					self.advance_until_char(|c| !c.is_alphanumeric()),
+				),
+				c if c.is_alphabetic() && c.is_uppercase() => Token(
+					TokenKind::Type,
+					self.advance_until_char(|c| !c.is_alphanumeric()),
+				),
 				c if c.is_whitespace() => Token(
 					TokenKind::Whitespace,
 					self.advance_until_char(|c| !c.is_whitespace()),
 				),
-				_ => self.syntax_error(format!("Unexpected character '{}' encountered", next_char)),
+				_ => self.syntax_error(format!("Unexpected token '{}' encountered", next_char)),
 			})
-		} else {
-			None
-		}
 	}
 
 	fn advance_source(&mut self, start: &str) -> &'a str {
@@ -94,15 +115,21 @@ pub(crate) struct Token<'l>(pub(crate) TokenKind, pub(crate) &'l str);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TokenKind {
+	Assign,
+	Ident,
+	Type,
 	Integer,
-	Plus,
 	Minus,
+	Plus,
 	Mul,
 	Div,
 	LParen,
 	RParen,
 	Whitespace,
 	Proc,
+	Let,
+	Eq,
+	Semicolon,
 }
 
 impl<'a> Iterator for Lexer<'a> {
