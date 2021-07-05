@@ -2,6 +2,7 @@ use super::bytecode::*;
 
 pub const REGISTERS: u8 = 16;
 
+#[derive(Default)]
 pub(crate) struct FinProgram {
 	pub(crate) program_data: Vec<Word>,
 	pub(crate) code: Vec<Instruction>,
@@ -35,6 +36,7 @@ impl FinProgram {
 			if reg.cond_matches(instruction.condition) {
 				use Mnemonic::*;
 				match instruction.mnemonic {
+					Nop => (),
 					Dbg => println!("{:?}\n{:?}", &reg, &data),
 					Inc => *reg.write_gp(instruction.args[0]) += 1,
 					Load => {

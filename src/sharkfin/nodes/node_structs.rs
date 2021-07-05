@@ -1,19 +1,18 @@
 use crate::bytecode::*;
 use crate::sharkfin::vars::*;
-
-pub(super) type RootNode<'a> = CodeBlock<'a>;
+use super::RootNode;
 
 #[derive(Debug)]
 pub struct ProgramRoot<'a>(pub(super) RootNode<'a>);
 
 #[derive(Debug)]
 pub(super) struct StatementList<'a> {
-	pub(super) statements: Vec<Statement<'a>>,
+	pub statements: Vec<Statement<'a>>,
 }
 
 #[derive(Debug)]
 pub(super) struct CodeBlock<'a> {
-	pub(super) code: Vec<Statement<'a>>,
+	pub code: Vec<Statement<'a>>,
 }
 
 #[derive(Debug)]
@@ -23,18 +22,18 @@ pub(super) enum Statement<'a> {
 
 #[derive(Debug)]
 pub(super) struct LetVar<'a> {
-	pub(super) init: Sum<'a>,
-	pub(super) variable: VariableID<'a>,
+	pub init: Sum<'a>,
+	pub variable: VariableID<'a>,
 }
 
 #[derive(Debug)]
 pub(super) struct Sum<'a> {
-	pub(super) addends: Vec<(Multiplication<'a>, bool)>,
+	pub addends: Vec<(Multiplication<'a>, bool)>,
 }
 
 #[derive(Debug)]
 pub(super) struct Multiplication<'a> {
-	pub(super) factors: Vec<(Factor<'a>, bool)>,
+	pub factors: Vec<(Factor<'a>, bool)>,
 }
 
 #[derive(Debug)]
@@ -46,11 +45,11 @@ pub(super) enum Factor<'a> {
 
 #[derive(Debug)]
 pub(super) struct AccessVar<'a> {
-	pub(super) variable: VariableID<'a>,
+	pub variable: VariableID<'a>,
 }
 
 #[derive(Debug)]
 pub(super) struct LiteralInt<'a> {
-	pub(super) value: Word,
-	pub(super) output: (VariableID<'a>, Option<VariableID<'a>>),
+	pub value: Word,
+	pub output: (VariableID<'a>, Option<VariableID<'a>>),
 }

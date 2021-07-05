@@ -1,67 +1,67 @@
 use crate::bytecode::Word;
 
 pub(crate) struct Lexer<'a> {
-	source: &'a str,
-	cursor: usize,
+	pub(super) source: &'a str,
+	pub(super) cursor: usize,
+	pub(super) line: usize,
 }
 
 impl<'a> Lexer<'a> {
 	pub(crate) fn new(source: &'a str) -> Self {
-		Self { source, cursor: 0 }
+		Self {
+			source,
+			cursor: 0,
+			line: 1,
+		}
 	}
 
-	pub(crate) fn advance_token(&mut self) -> Option<Token<'a>> {
+	pub(crate) fn advance_token(&mut self) -> Result<Token<'a>, String> {
 		use TokenKind::*;
-		const EXACT_TOKENS: &[(&str, TokenKind)] = &[
-			(";", Semicolon),
-			("+", Plus),
-			("-", Minus),
-			("*", Mul),
-			("/", Div),
-			("(", LParen),
-			(")", RParen),
-			("==", Eq),
-			("=", Assign),
-			("let", Let),
-			("proc", Proc),
+		const EXACT_TOKENS: &[TokenKind] = &[
+			Semicolon, Plus, Minus, Mul, Div, LParen, RParen, LCurly, RCurly, Eq, Assign, Let, Func,
 		];
 
-		for (string, kind) in EXACT_TOKENS {
-			if self.remaining().starts_with(string) {
-				return Some(Token(*kind, self.advance_source(string)));
+		for &kind in EXACT_TOKENS {
+			let text = kind.as_str();
+			if self.remaining().starts_with(text) {
+				let text = self.advance_source(text);
+				return Ok(self.create_token(kind, text));
 			}
 		}
 
-		self.remaining()
-			.chars()
-			.next()
-			.map(|next_char| match next_char {
+		if let Some(next) = self.remaining().chars().next() {
+			match next {
+				c if !c.is_ascii() => Err("Non-ASCII character encountered!".into()),
 				d if d.is_digit(10) => {
-					let num_str = self.advance_until_char(|d| !d.is_digit(10));
-					match Word::from_str_radix(num_str, 10) {
-						Ok(_) => Token(TokenKind::Integer, num_str),
-						Err(err) => self.syntax_error(err),
+					let text = self.advance_until_char(|d| !d.is_digit(10));
+					match Word::from_str_radix(text, 10) {
+						Ok(_) => Ok(self.create_token(TokenKind::Integer, text)),
+						Err(err) => Err(format!("{:?}!", err)),
 					}
 				}
-				c if c.is_alphabetic() && c.is_lowercase() => Token(
-					TokenKind::Ident,
-					self.advance_until_char(|c| !c.is_alphanumeric()),
-				),
-				c if c.is_alphabetic() && c.is_uppercase() => Token(
-					TokenKind::Type,
-					self.advance_until_char(|c| !c.is_alphanumeric()),
-				),
-				c if c.is_whitespace() => Token(
-					TokenKind::Whitespace,
-					self.advance_until_char(|c| !c.is_whitespace()),
-				),
-				_ => self.syntax_error(format!("Unexpected token '{}' encountered", next_char)),
-			})
+				c if c.is_alphabetic() && c.is_lowercase() => {
+					let text = self.advance_until_char(|c| !c.is_alphanumeric());
+					Ok(self.create_token(TokenKind::Ident, text))
+				}
+				c if c.is_alphabetic() && c.is_uppercase() => {
+					let text = self.advance_until_char(|c| !c.is_alphanumeric());
+					Ok(self.create_token(TokenKind::Type, text))
+				}
+				c if c.is_whitespace() => {
+					let text = self.advance_until_char(|c| !c.is_whitespace());
+					Ok(self.create_token(TokenKind::Whitespace, text))
+				}
+				_ => Err("Unknown Character".into()),
+			}
+		} else {
+			Ok(self.create_token(TokenKind::Eof, &self.source[0..0]))
+		}
 	}
 
 	fn advance_source(&mut self, start: &str) -> &'a str {
 		debug_assert!(self.remaining().starts_with(start));
-		let ret = &self.source[self.cursor..(start.len() + self.cursor)];
+		self.line += start.split('\n').count() - 1;
+		let ret = &self.remaining()[..start.len()];
 		self.cursor += start.len();
 		ret
 	}
@@ -73,6 +73,7 @@ impl<'a> Lexer<'a> {
 			.unwrap_or_else(|| self.remaining().len());
 		let ret = &self.source[self.cursor..(index + self.cursor)];
 		self.cursor += index;
+		self.line += ret.split('\n').count() - 1;
 		ret
 	}
 
@@ -80,61 +81,66 @@ impl<'a> Lexer<'a> {
 		&self.source[self.cursor..]
 	}
 
-	fn syntax_error<T: ToString>(&self, message: T) -> ! {
-		use std::panic;
-
-		let lines = self.source.lines().count();
-		let line_start = self.source[..self.cursor]
-			.rfind('\n')
-			.map(|p| p + 1)
-			.unwrap_or(0);
-		let line_end = self
-			.remaining()
-			.find('\n')
-			.unwrap_or_else(|| self.remaining().len())
-			+ self.cursor;
-
-		println!(
-			"Error at {line_num}:{col}!\n\t{err}\n\t{line_text}\n\t{pointer:>col$}",
-			err = message.to_string(),
-			line_num = lines,
-			col = line_end - line_start - 1,
-			line_text = &self.source[line_start..line_end],
-			pointer = '^',
-		);
-
-		panic::set_hook(Box::new(
-			|_info| { /* Remove Rust's custom error message. */ },
-		));
-		panic!()
+	fn create_token(&self, kind: TokenKind, text: &'a str) -> Token<'a> {
+		Token {
+			kind,
+			text,
+			line: self.line,
+		}
 	}
 }
 
-#[derive(Debug)]
-pub(crate) struct Token<'l>(pub(crate) TokenKind, pub(crate) &'l str);
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Token<'a> {
+	pub(crate) kind: TokenKind,
+	pub(crate) text: &'a str,
+	pub(crate) line: usize,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TokenKind {
-	Assign,
 	Ident,
 	Type,
 	Integer,
-	Minus,
+	Whitespace,
+	Eof,
+	Assign,
 	Plus,
+	Minus,
 	Mul,
 	Div,
 	LParen,
 	RParen,
-	Whitespace,
-	Proc,
+	LCurly,
+	RCurly,
+	Func,
 	Let,
 	Eq,
 	Semicolon,
 }
 
-impl<'a> Iterator for Lexer<'a> {
-	type Item = Token<'a>;
-	fn next(&mut self) -> Option<Self::Item> {
-		self.advance_token()
+impl TokenKind {
+	pub(crate) fn as_str(&self) -> &'static str {
+		use TokenKind::*;
+		match self {
+			Ident => "{identifier}",
+			Type => "{Type}",
+			Integer => "{integer}",
+			Whitespace => "{whitespace}",
+			Eof => "EOF",
+			Assign => "=",
+			Plus => "+",
+			Minus => "-",
+			Mul => "*",
+			Div => "/",
+			LParen => "(",
+			RParen => ")",
+			LCurly => "{",
+			RCurly => "}",
+			Func => "func",
+			Let => "let",
+			Eq => "==",
+			Semicolon => ";",
+		}
 	}
 }

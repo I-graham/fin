@@ -79,6 +79,16 @@ impl Instruction {
 	}
 }
 
+impl Default for Instruction {
+	fn default() -> Self {
+		Self {
+			condition: Condition::Al,
+			mnemonic: Mnemonic::Nop,
+			args: [0; 6],
+		}
+	}
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
 #[repr(u8)]
@@ -100,7 +110,9 @@ pub(crate) enum Condition {
 #[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
 #[repr(u8)]
 pub(crate) enum Mnemonic {
-	Dbg = 0,
+	Nop = 0,
+	//Does nothing: no-op
+	Dbg,
 	//Print debug info
 	Inc,
 	//Increment value in registers[args[0]]
