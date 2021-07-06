@@ -1,31 +1,23 @@
 use super::lexer::{Token, TokenKind};
+use crate::runtime_error::{get_full_line, get_pos_in};
 use std::ops::Range;
 use std::process::exit;
 
-fn get_pos_in(full: &str, substr: &str) -> usize {
-	let src_ptr = full.as_ptr() as usize;
-	let sub_ptr = substr.as_ptr() as usize;
-	debug_assert!(src_ptr <= sub_ptr);
-	let pos = sub_ptr - src_ptr;
-	debug_assert!(pos < full.len());
-	pos
-}
-
-pub(super) struct Error<'a> {
+pub(super) struct CompileError<'a> {
 	source: &'a str,
 }
 
-impl<'a> Error<'a> {
+impl<'a> CompileError<'a> {
 	pub(super) fn new(source: &'a str) -> Self {
-		Self { source }
+		CompileError { source }
 	}
 
-	pub(super) fn err_at_char(&self, msg: &str, cursor_pos: usize, line_num: usize) -> ! {
-		self.display_err(msg, "", cursor_pos..cursor_pos + 1, line_num)
+	pub(super) fn err_at_char(&self, msg: &str, help: &str, cursor_pos: usize, line_num: usize) -> ! {
+		self.display_err(msg, help, cursor_pos..cursor_pos + 1, line_num)
 	}
 
-	pub(super) fn err_at_token(&self, msg: &str, token: Token) -> ! {
-		self.err_at_substr(msg, token.text, token.line);
+	pub(super) fn err_at_token(&self, msg: &str, help: &str, token: Token) -> ! {
+		self.err_at_substr(msg, help, token.text, token.line);
 	}
 
 	pub(super) fn suggest_at_token(&self, token: Token, suggestions: &[TokenKind]) -> ! {
@@ -52,9 +44,9 @@ impl<'a> Error<'a> {
 		)
 	}
 
-	pub(super) fn err_at_substr(&self, msg: &str, substr: &str, line_num: usize) -> ! {
+	pub(super) fn err_at_substr(&self, msg: &str, help:&str, substr: &str, line_num: usize) -> ! {
 		let pos = get_pos_in(self.source, substr);
-		self.display_err(msg, "", pos..(pos + substr.len()), line_num)
+		self.display_err(msg, help, pos..(pos + substr.len()), line_num)
 	}
 
 	fn display_err(
@@ -65,7 +57,7 @@ impl<'a> Error<'a> {
 		line_num: usize,
 	) -> ! {
 		debug_assert!(range.start < self.source.len());
-		let full_line = self.get_full_line(range.start);
+		let full_line = get_full_line(&self.source, range.start);
 		let col = range.start - get_pos_in(self.source, full_line);
 		let line_num_width = (line_num as f64).log10().round() as usize + 1;
 		println!(
@@ -84,16 +76,5 @@ impl<'a> Error<'a> {
 			help_msg = help_msg,
 		);
 		exit(0)
-	}
-
-	fn get_full_line(&self, pos: usize) -> &str {
-		debug_assert!(pos < self.source.len());
-		debug_assert!(self.source.is_char_boundary(pos));
-		let start = self.source[..pos].rfind('\n').map(|l| l + 1).unwrap_or(0);
-		let end = self.source[pos..]
-			.find('\n')
-			.map(|l| l + pos)
-			.unwrap_or(self.source.len());
-		&self.source[start..end]
 	}
 }

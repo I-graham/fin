@@ -1,26 +1,55 @@
 use super::bytecode::*;
+use super::runtime_error::*;
 
 pub const REGISTERS: u8 = 16;
 
 #[derive(Default)]
-pub(crate) struct FinProgram {
+pub(crate) struct FinProgram<'a> {
 	pub(crate) program_data: Vec<Word>,
 	pub(crate) code: Vec<Instruction>,
+	pub(crate) debug_info: Option<DebugInfo<'a>>,
 }
 
-impl FinProgram {
-	pub(crate) fn new(bytecode: &[u8]) -> Self {
+impl<'a> FinProgram<'a> {
+	pub(crate) fn new(bytecode: &'a [u8]) -> Self {
+		let mut counter = 0;
+		let mut read_n_bytes = |n: usize| {
+			counter += n;
+			&bytecode[(counter - n)..counter]
+		};
+
+		let slice_to_int = |bytes: &[u8]| Word::from_le_bytes(bytes[..].try_into().unwrap());
+
 		use std::convert::TryInto;
-		let data_size = Word::from_le_bytes(bytecode[0..8].try_into().unwrap());
+		let src_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
+		let source = std::str::from_utf8(&read_n_bytes(src_size)).expect("Malformed bytecode!");
+		let debug_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
+		let debug = read_n_bytes(debug_size)
+			.chunks_exact(24)
+			.map(|bytes| {
+				(
+					slice_to_int(&bytes[0..8])..slice_to_int(&bytes[8..16]),
+					slice_to_int(&bytes[16..24]),
+				)
+			})
+			.collect::<Vec<_>>();
+		let data_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
+		let program_data = read_n_bytes(data_size)
+			.chunks_exact(8)
+			.map(slice_to_int)
+			.collect::<Vec<_>>();
+		let code_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
+		let code = read_n_bytes(code_size)
+			.chunks_exact(8)
+			.map(|bytes| Instruction::from_raw(bytes[..].try_into().unwrap()))
+			.collect::<Vec<_>>();
 		Self {
-			program_data: bytecode[8..(8 + data_size as usize)]
-				.rchunks_exact(8)
-				.map(|bytes| Word::from_le_bytes(bytes[..].try_into().unwrap()))
-				.collect::<Vec<_>>(),
-			code: bytecode[(8 + data_size as usize)..]
-				.chunks_exact(8)
-				.map(|bytes| Instruction::from_raw(bytes[..].try_into().unwrap()))
-				.collect::<Vec<_>>(),
+			program_data,
+			code,
+			debug_info: Some(DebugInfo {
+				source,
+				line_ranges: debug,
+			}),
 		}
 	}
 
@@ -102,9 +131,13 @@ impl FinProgram {
 							.wrapping_mul(reg.read_gp(instruction.args[2]));
 					}
 					Div => {
-						*reg.write_gp(instruction.args[0]) =
-							(reg.read_gp(instruction.args[1]) as i64
-								/ reg.read_gp(instruction.args[2]) as i64) as Word;
+						let divisor = reg.read_gp(instruction.args[2]) as i64;
+						if divisor != 0 {
+							*reg.write_gp(instruction.args[0]) =
+								(reg.read_gp(instruction.args[1]) as i64 / divisor) as Word;
+						} else {
+							self.throw_error("Division by zero!", reg.ip);
+						}
 					}
 					Mov => {
 						*reg.write_gp(instruction.args[1]) = reg.read_gp(instruction.args[0]);
@@ -118,31 +151,36 @@ impl FinProgram {
 		}
 	}
 
-	pub(crate) fn assemble(mut input: String) -> Self {
+	pub(crate) fn assemble(input: &str) -> Self {
 		use std::str::FromStr;
-		let code = input.split_off(input.find(']').expect("Invalid program data format"));
-		input.retain(|c| !c.is_whitespace());
+		let (data, code) = input.split_at(input.find(']').expect("Invalid program data format"));
 		Self {
-			program_data: input[1..]
+			program_data: data
 				.split(',')
 				.filter_map(|num| {
 					if !num.is_empty() {
-						Some(Word::from_str(num).expect("Invalid Number"))
+						Some(
+							Word::from_str(num.replace(char::is_whitespace, "").as_str())
+								.expect("Invalid Number"),
+						)
 					} else {
 						None
 					}
 				})
 				.collect(),
-			code: code[2..]
+			code: code
 				.split(';')
 				.filter_map(|inst| {
 					if !inst.is_empty() {
-						Some(Instruction::from_string(inst.into()))
+						Some(Instruction::from_string(
+							inst.replace(char::is_whitespace, ""),
+						))
 					} else {
 						None
 					}
 				})
 				.collect(),
+			debug_info: None,
 		}
 	}
 
@@ -169,14 +207,39 @@ impl FinProgram {
 
 	pub(crate) fn to_raw(&self) -> Vec<u8> {
 		let mut output = vec![];
-		output.extend_from_slice(&(self.program_data.len() as Word).to_le_bytes());
-		for word in &self.program_data {
-			output.extend(&word.to_le_bytes());
+		let push_word = |output: &mut Vec<_>, val: Word| {
+			output.extend(&val.to_le_bytes());
+		};
+		if let Some(debug) = &self.debug_info {
+			push_word(&mut output, debug.source.len() as Word);
+			output.extend(debug.source.as_bytes());
+			push_word(&mut output, debug.line_ranges.len() as Word);
+			for (range, line) in &debug.line_ranges {
+				push_word(&mut output, range.start);
+				push_word(&mut output, range.end);
+				push_word(&mut output, *line);
+			}
+		} else {
+			push_word(&mut output, 0);
+			push_word(&mut output, 0);
 		}
+		push_word(&mut output, self.program_data.len() as Word);
+		for word in &self.program_data {
+			push_word(&mut output, *word);
+		}
+		push_word(&mut output, self.code.len() as Word);
 		for inst in &self.code {
-			output.extend(&inst.as_raw().to_le_bytes());
+			push_word(&mut output, inst.as_raw());
 		}
 		output
+	}
+
+	fn throw_error(&self, msg: &str, ip: Word) -> ! {
+		if let Some(debug) = &self.debug_info {
+			debug.throw_with_debug_info(msg, ip);
+		} else {
+			throw_error(msg, ip as usize, &self.code[ip as usize]);
+		};
 	}
 }
 

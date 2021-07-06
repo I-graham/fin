@@ -147,7 +147,7 @@ pub(crate) enum Mnemonic {
 	Mul,
 	//Integer multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Div,
-	//Integer divide registers[args[2]] by registers[args[1]] into registers[args[0]]
+	//Integer divide registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Mov,
 	//Move registers[args[0]] into registers[args[1]]
 	Hlt,

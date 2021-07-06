@@ -1,5 +1,6 @@
-use crate::bytecode::*;
 //collection of bytecode snippets
+
+use crate::bytecode::*;
 
 pub(super) fn load_const(value: Word, reg1: u8, reg2: Option<u8>, out: &mut Vec<Instruction>) {
 	if value.leading_zeros() + value.trailing_zeros() >= Word::BITS / 2 {
@@ -10,11 +11,11 @@ pub(super) fn load_const(value: Word, reg1: u8, reg2: Option<u8>, out: &mut Vec<
 		};
 		let val = (value >> shift) as u32;
 		let [a, b, c, d] = val.to_le_bytes();
-		out.push(Instruction {
+		out.extend(&[Instruction {
 			mnemonic: Mnemonic::Const,
 			args: [reg1, shift, a, b, c, d],
 			..Default::default()
-		});
+		}]);
 	} else if let Some(reg2) = reg2 {
 		let shift = (Word::BITS / 2) as u8;
 		let val = value as u32;

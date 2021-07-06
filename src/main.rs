@@ -1,5 +1,6 @@
 mod bytecode;
 mod interpreter;
+mod runtime_error;
 mod sharkfin;
 
 use clap::{App, Arg, SubCommand};
@@ -75,7 +76,7 @@ fn main() {
 		let input_contents = read_to_string(input_file_name).expect("Unable to read file");
 		write(
 			matches.value_of("output").unwrap_or("out.fin"),
-			FinProgram::assemble(input_contents).to_raw(),
+			FinProgram::assemble(&input_contents).to_raw(),
 		)
 		.expect("Unable to output file");
 	} else if let Some(matches) = matches.subcommand_matches("disas") {

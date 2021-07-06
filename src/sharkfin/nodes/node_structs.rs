@@ -1,6 +1,7 @@
+use super::{CompileContext, RootNode};
 use crate::bytecode::*;
+use crate::sharkfin::lexer::*;
 use crate::sharkfin::vars::*;
-use super::RootNode;
 
 #[derive(Debug)]
 pub struct ProgramRoot<'a>(pub(super) RootNode<'a>);
@@ -18,22 +19,23 @@ pub(super) struct CodeBlock<'a> {
 #[derive(Debug)]
 pub(super) enum Statement<'a> {
 	LetVar(LetVar<'a>),
+	Empty,
 }
 
 #[derive(Debug)]
 pub(super) struct LetVar<'a> {
 	pub init: Sum<'a>,
-	pub variable: VariableID<'a>,
+	pub name: Token<'a>,
 }
 
 #[derive(Debug)]
 pub(super) struct Sum<'a> {
-	pub addends: Vec<(Multiplication<'a>, bool)>,
+	pub addends: Vec<(Multiplication<'a>, Option<Token<'a>>)>,
 }
 
 #[derive(Debug)]
 pub(super) struct Multiplication<'a> {
-	pub factors: Vec<(Factor<'a>, bool)>,
+	pub factors: Vec<(Factor<'a>, Option<Token<'a>>)>,
 }
 
 #[derive(Debug)]
@@ -45,11 +47,26 @@ pub(super) enum Factor<'a> {
 
 #[derive(Debug)]
 pub(super) struct AccessVar<'a> {
-	pub variable: VariableID<'a>,
+	pub var: Token<'a>,
 }
 
 #[derive(Debug)]
 pub(super) struct LiteralInt<'a> {
 	pub value: Word,
 	pub output: (VariableID<'a>, Option<VariableID<'a>>),
+}
+
+impl<'a> LiteralInt<'a> {
+	pub(super) fn from_const(value: Word, context: &mut CompileContext<'a>) -> Self {
+		Self {
+			value,
+			output: if value.leading_zeros() + value.trailing_zeros() >= Word::BITS / 2 {
+				let [v] = context.scope.allocate_var(&[(None, VarType::Int)]);
+				(v, None)
+			} else {
+				let [f, s] = context.scope.allocate_var(&[(None, VarType::Int); 2]);
+				(f, Some(s))
+			},
+		}
+	}
 }

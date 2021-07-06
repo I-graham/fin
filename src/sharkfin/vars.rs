@@ -28,15 +28,6 @@ impl<'a> FunctionScope<'a> {
 		syn
 	}
 
-	pub fn alloc_and_use<const N: usize>(
-		&mut self,
-		info: &[(Option<&'a str>, VarType); N],
-	) -> [VariableID<'a>; N] {
-		let allocated = self.allocate_var(info);
-		self.record_usage(&allocated);
-		allocated
-	}
-
 	pub fn allocate_var<const N: usize>(
 		&mut self,
 		info: &[(Option<&'a str>, VarType); N],
@@ -83,11 +74,11 @@ impl<'a> FunctionScope<'a> {
 					);
 				}
 				abbreviations::load_const(addr, reg_id, None, out);
-				out.push(Instruction {
+				out.extend(&[Instruction {
 					condition: Condition::Al,
 					mnemonic: Mnemonic::StkLd,
 					args: [reg_id, reg_id, 0, 0, 0, 0],
-				});
+				}]);
 			}
 			var.location = Location::Register(reg_id);
 		};
@@ -158,11 +149,11 @@ impl<'a> FunctionScope<'a> {
 				replaced.location = Location::Stack(self.stack_size);
 				self.stack_size += 1;
 
-				out.push(Instruction {
+				out.extend(&[Instruction {
 					condition: Condition::Al,
 					mnemonic: Mnemonic::Push,
 					args: [reg, 0, 0, 0, 0, 0],
-				});
+				}]);
 
 				let var = self.variables.get_mut(&base_id).unwrap();
 				move_var_from_stack(var, reg, out);

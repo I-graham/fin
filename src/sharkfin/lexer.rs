@@ -127,7 +127,7 @@ impl TokenKind {
 			Type => "{Type}",
 			Integer => "{integer}",
 			Whitespace => "{whitespace}",
-			Eof => "EOF",
+			Eof => "{end of file}",
 			Assign => "=",
 			Plus => "+",
 			Minus => "-",
