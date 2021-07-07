@@ -1,11 +1,6 @@
 {
-	let Int x = 0;
-	let Int y = 1/x;
-	let Int a = 1+y;
-	let Int b = 1+a;
-	let Int c = 1+b;
-	let Int d = 1+c;
-	let Int e = 1+d;
-	let Int f = 1+e;
-	let Int g = 1/(f-1-e);
+	let Int x = 1;
+	x = 3;
+	x = x + 1;
+	let Int y = x;
 }

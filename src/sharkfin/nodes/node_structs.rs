@@ -19,13 +19,19 @@ pub(super) struct CodeBlock<'a> {
 #[derive(Debug)]
 pub(super) enum Statement<'a> {
 	LetVar(LetVar<'a>),
+	MutateVar(MutateVar<'a>),
 	Empty,
 }
 
 #[derive(Debug)]
 pub(super) struct LetVar<'a> {
-	pub init: Sum<'a>,
-	pub name: Token<'a>,
+	pub mut_var : MutateVar<'a>,
+}
+
+#[derive(Debug)]
+pub(super) struct MutateVar<'a> {
+	pub access: AccessVar<'a>,
+	pub val: Sum<'a>,
 }
 
 #[derive(Debug)]

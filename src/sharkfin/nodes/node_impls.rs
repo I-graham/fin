@@ -94,9 +94,11 @@ impl<'a> ASTNode<'a> for Statement<'a> {
 	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])> {
 		if context.tokens[start].kind == TokenKind::Semicolon {
 			Ok((start + 1, Self::Empty))
+		} else if let Ok((node_end, let_var)) = LetVar::construct(context, start) {
+			Ok((node_end, Self::LetVar(let_var)))
 		} else {
-			match LetVar::construct(context, start) {
-				Ok((node_end, letvar)) => Ok((node_end, Self::LetVar(letvar))),
+			match MutateVar::construct(context, start) {
+				Ok((node_end, mut_var)) => Ok((node_end, Self::MutateVar(mut_var))),
 				Err(err) => Err(err),
 			}
 		}
@@ -105,6 +107,7 @@ impl<'a> ASTNode<'a> for Statement<'a> {
 	fn record_var_usage(&self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
 		match self {
 			Self::LetVar(let_var) => let_var.record_var_usage(context),
+			Self::MutateVar(mut_var) => mut_var.record_var_usage(context),
 			Self::Empty => None,
 		}
 	}
@@ -112,6 +115,7 @@ impl<'a> ASTNode<'a> for Statement<'a> {
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
 		match self {
 			Self::LetVar(letvar) => letvar.generate_source(context),
+			Self::MutateVar(mut_var) => mut_var.generate_source(context),
 			Self::Empty => (),
 		}
 	}
@@ -125,54 +129,41 @@ impl<'a> ASTNode<'a> for LetVar<'a> {
 		use TokenKind::*;
 		static FORMAT: [TokenKind; 4] = [Let, Type, Ident, Assign];
 		match tokens_match_kinds(&context.tokens[start..], &FORMAT) {
-			Ok(()) => {
-				let new_start = start + FORMAT.len();
-				let ident = context.tokens[start + 2];
-				if context.scope.get_var(ident.text).is_some() {
-					context.error.err_at_token(
-						"Variable name already in use!",
-						"Use a different variable name.",
-						ident,
-					);
-				}
-				match Sum::construct(context, new_start) {
-					Ok((node_end, sum)) => {
-						if context.tokens.len() > node_end
-							&& context.tokens[node_end].kind == Semicolon
-						{
-							Ok((
-								node_end + 1,
-								Self {
-									init: sum,
-									name: ident,
-								},
-							))
-						} else {
-							Err((context.tokens[node_end], &[Semicolon]))
-						}
-					}
-					Err(err) => Err(err),
-				}
-			}
+			Ok(()) => match MutateVar::construct(context, start + 2) {
+				Ok((end, mut_var)) => Ok((end, Self { mut_var })),
+				Err(err) => Err(err),
+			},
 			Err(i) => Err((context.tokens[i + start], &FORMAT[i..=i])),
 		}
 	}
 
 	fn record_var_usage(&self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
-		let sum_var = self.init.record_var_usage(context).unwrap();
-		Some(context.scope.create_synonym(Some(self.name.text), sum_var))
+		let sum_var = self.mut_var.val.record_var_usage(context).unwrap();
+		let access = &self.mut_var.access;
+		let var_name = access.var.text;
+		if context.scope.get_var(var_name).is_some() {
+			context.error.err_at_token(
+				"Variable name already in use!",
+				"Use a different variable name.",
+				access.var,
+			);
+		}
+		context.scope.create_synonym(Some(var_name), sum_var);
+		self.mut_var.access.record_var_usage(context);
+		None
 	}
 
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
-		self.init.generate_source(context);
-		let var = VariableID::Named(self.name.text);
+		self.mut_var.generate_source(context);
+		let access = &self.mut_var.access;
+		let var_id = VariableID::Named(access.var.text);
 		println!(
 			"Var `{}` stored in reg #{:?} at inst #{}.",
-			self.name.text,
-			&context.scope.register(&[var], &mut context.output.code),
+			access.var.text,
+			&context.scope.register(&[var_id], &mut context.output.code),
 			context.output.code.len()
 		);
-		context.update_debug_info(Some(self.name));
+		context.update_debug_info(Some(access.var));
 
 		context.output.code.push(Instruction {
 			mnemonic: Mnemonic::Dbg,
@@ -486,8 +477,8 @@ impl<'a> ASTNode<'a> for AccessVar<'a> {
 			Some(var)
 		} else {
 			context.error.err_at_token(
-				"Use of undeclared variable",
-				"Declare this variable before use.",
+				"Use of undefined variable",
+				"Define this variable before use.",
 				self.var,
 			);
 		}
@@ -498,6 +489,65 @@ impl<'a> ASTNode<'a> for AccessVar<'a> {
 	}
 
 	fn generate_source(&self, _context: &mut CompileContext<'a>) {}
+}
+
+impl<'a> ASTNode<'a> for MutateVar<'a> {
+	fn construct(
+		context: &mut CompileContext<'a>,
+		start: usize,
+	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])> {
+		use TokenKind::*;
+		static FORMAT: [TokenKind; 2] = [Ident, Assign];
+		match tokens_match_kinds(&context.tokens[start..], &FORMAT) {
+			Ok(()) => match AccessVar::construct(context, start) {
+				Ok((end, access)) => match Sum::construct(context, end + 1) {
+					Ok((node_end, sum)) => {
+						if context.tokens.len() > node_end
+							&& context.tokens[node_end].kind == Semicolon
+						{
+							Ok((node_end + 1, Self { access, val: sum }))
+						} else {
+							Err((context.tokens[node_end], &[Semicolon]))
+						}
+					}
+					Err(err) => Err(err),
+				},
+				Err(err) => Err(err),
+			},
+			Err(i) => Err((context.tokens[i + start], &FORMAT[i..=i])),
+		}
+	}
+
+	fn record_var_usage(&self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
+		let value = self.val.record_var_usage(context).unwrap();
+		let access = self.access.record_var_usage(context).unwrap();
+		context.scope.record_usage(&[value, access]);
+		None
+	}
+
+	fn generate_source(&self, context: &mut CompileContext<'a>) {
+		self.access.generate_source(context);
+		self.val.generate_source(context);
+		let var_op = self.access.output_var().unwrap();
+		let val_op = self.val.output_var().unwrap();
+		let out = &mut context.output.code;
+		let [val, var] = context.scope.register(&[val_op, var_op], out);
+		context.emit(
+			&[
+				Instruction {
+					condition: Condition::Al,
+					mnemonic: Mnemonic::Mov,
+					args: [val, var, 0, 0, 0, 0],
+				},
+				Instruction {
+					condition: Condition::Al,
+					mnemonic: Mnemonic::Dbg,
+					args: [val, var, 0, 0, 0, 0],
+				},
+			],
+			Some(self.access.var),
+		)
+	}
 }
 
 impl<'a> ASTNode<'a> for LiteralInt<'a> {

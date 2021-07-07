@@ -1,7 +1,7 @@
 use super::abbreviations;
 use crate::bytecode::*;
 use crate::interpreter::*;
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use std::ops::Range;
 
 #[derive(Debug, Default)]
@@ -14,6 +14,7 @@ pub(super) struct FunctionScope<'a> {
 	synonyms: FnvHashMap<VariableID<'a>, VariableID<'a>>,
 	variables: FnvHashMap<VariableID<'a>, Variable>,
 	registers: [Option<VariableID<'a>>; REGISTERS as usize],
+	recorders: Vec<FnvHashSet<VariableID<'a>>>,
 }
 
 impl<'a> FunctionScope<'a> {
@@ -48,16 +49,19 @@ impl<'a> FunctionScope<'a> {
 		out
 	}
 
-	pub fn record_usage<const N: usize>(&mut self, ids: &[VariableID<'a>; N]) {
+	pub fn record_usage(&mut self, ids: &[VariableID<'a>]) {
 		self.intervals.0 += 1;
 		let usage_num = self.intervals.0;
 		for id in ids {
 			let base_id = self.get_base_id(*id);
-			let mut_var = self.intervals.1.get_mut(&base_id).unwrap();
-			if mut_var.start == 0 {
-				mut_var.start = usage_num;
+			let var = self.intervals.1.get_mut(&base_id).unwrap();
+			if var.start == 0 {
+				var.start = usage_num;
 			}
-			mut_var.end = usage_num;
+			var.end = usage_num;
+			for recorder in &mut self.recorders {
+				recorder.insert(base_id);
+			}
 		}
 	}
 
@@ -70,7 +74,7 @@ impl<'a> FunctionScope<'a> {
 			if let Location::Stack(addr) = var.location {
 				if addr.leading_zeros() + addr.trailing_zeros() < Word::BITS / 2 {
 					unimplemented!(
-						"Number of variables in single function must fit within 64 bits! ()"
+						"Number of variables in single function must fit within 64 bits!"
 					);
 				}
 				abbreviations::load_const(addr, reg_id, None, out);
@@ -87,9 +91,9 @@ impl<'a> FunctionScope<'a> {
 
 		for id in ids.iter() {
 			let base_id = self.get_base_id(*id);
-			//erase vars which died before this one was born, AKA vars which will never be used
+			//erase vars which died before this one was born, AKA vars which will never be used again
 			for (var, interval) in self.intervals.1.iter() {
-				if interval.end < self.intervals.1[&base_id].start {
+				if interval.end <= self.intervals.1[&base_id].start && !ids.contains(&var) {
 					if let Some(dead_var) = self.variables.remove(&var) {
 						self.synonyms.retain(|_, v| v != var);
 						if let Location::Register(reg) = dead_var.location {
@@ -176,6 +180,15 @@ impl<'a> FunctionScope<'a> {
 			None
 		}
 	}
+
+/*	pub fn push_recorder(&mut self) {
+		self.recorders.push(Default::default());
+	}
+
+	pub fn pop_recorder(&mut self) -> FnvHashSet<VariableID<'a>> {
+		self.recorders.pop().expect("Popped empty stack!")
+	}
+*/
 
 	fn create_id(&mut self, name: Option<&'a str>) -> VariableID<'a> {
 		if let Some(varname) = name {
