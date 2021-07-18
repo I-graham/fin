@@ -44,8 +44,8 @@ pub(crate) struct WhileLoop<'a> {
 
 #[derive(Debug)]
 pub(crate) struct IfStatement<'a> {
-	pub cond: LogExpr<'a>,
-	pub code: CodeBlock<'a>,
+	pub cond_code: Vec<(LogExpr<'a>, CodeBlock<'a>)>,
+	pub else_code: Option<CodeBlock<'a>>,
 }
 
 #[derive(Debug)]

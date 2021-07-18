@@ -38,7 +38,7 @@ impl Instruction {
 
 	pub(crate) fn as_string(&self) -> String {
 		format!(
-			"{:8} {:8} [{}, {}, {}, {}, {}, {}]",
+			"{:8} {:8} [{:3}, {:3}, {:3}, {:3}, {:3}, {:3}]",
 			self.condition.to_string(),
 			self.mnemonic.to_string(),
 			self.args[0],

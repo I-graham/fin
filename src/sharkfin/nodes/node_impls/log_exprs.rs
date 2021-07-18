@@ -3,6 +3,17 @@ use super::*;
 //cond is emitted after comparison, negation is emitted after cond
 
 impl<'a> ASTNode<'a> for OrExpr<'a> {
+	fn precompute(&self) -> Option<Word> {
+		self.ands
+			.iter()
+			.map(|and| and.precompute())
+			.reduce(|a, b| match (a, b) {
+				(Some(1), _) | (_, Some(1)) => Some(1),
+				(Some(0), Some(0)) => Some(0),
+				_ => None,
+			})
+			.unwrap()
+	}
 	fn construct(
 		context: &mut CompileContext<'a>,
 		start: usize,
@@ -26,12 +37,15 @@ impl<'a> ASTNode<'a> for OrExpr<'a> {
 		let mut early_exits = vec![];
 		for and in &self.ands {
 			and.generate_source(context);
+			context.code().pop().unwrap();
 			early_exits.push(context.code().len() - 1);
 		}
-		let true_jmp = context.code().len() as Word;
-		let false_jmp = true_jmp + 1;
 		context.emit(
 			&[
+				Instruction {
+					mnemonic: Mnemonic::RelJmp,
+					..Default::default()
+				},
 				Instruction {
 					mnemonic: Mnemonic::RelJmp,
 					..Default::default()
@@ -43,18 +57,31 @@ impl<'a> ASTNode<'a> for OrExpr<'a> {
 			],
 			None,
 		);
+
+		let true_jmp = context.code().len() as Word - 2;
+		let false_jmp = true_jmp + 1;
+		abbreviations::branch(true_jmp - 1, false_jmp, context.code());
+		abbreviations::branch(true_jmp, context.code().len() as Word, context.code());
+
+
 		for early_exit in early_exits.iter().map(|&u| u as Word) {
-			abbreviations::branch(early_exit - 1, true_jmp, context.code());
+			abbreviations::branch(early_exit, true_jmp, context.code());
 		}
-		abbreviations::branch(
-			*early_exits.last().unwrap() as Word,
-			false_jmp,
-			context.code(),
-		);
 	}
 }
 
 impl<'a> ASTNode<'a> for AndExpr<'a> {
+	fn precompute(&self) -> Option<Word> {
+		self.bools
+			.iter()
+			.map(|boolean| boolean.precompute())
+			.reduce(|a, b| match (a, b) {
+				(Some(0), _) | (_, Some(0)) => Some(0),
+				(Some(1), Some(1)) => Some(1),
+				_ => None,
+			})
+			.unwrap()
+	}
 	fn construct(
 		context: &mut CompileContext<'a>,
 		start: usize,

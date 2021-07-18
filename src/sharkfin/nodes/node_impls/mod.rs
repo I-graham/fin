@@ -37,10 +37,6 @@ impl<'a> ASTNode<'a> for ProgramRoot<'a> {
 	}
 
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
-		//pad value so programs which loop to the first instruction do not overflow
-		//instruction pointer
-		context.emit(&[Default::default()], None);
-		context.update_debug_info(context.tokens.first().copied());
 		self.0.generate_source(context);
 		abbreviations::load_const(0, 0, None, context.code());
 		context.emit(
@@ -268,34 +264,84 @@ impl<'a> ASTNode<'a> for IfStatement<'a> {
 		start: usize,
 	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])> {
 		use TokenKind::*;
-		static START_TOKENS: [TokenKind; 1] = [If];
-		let _ = tokens_match_kinds(&context.tokens[start..], &START_TOKENS)?;
-		let (end, cond) = LogExpr::construct(context, start + START_TOKENS.len())?;
-		let (end, code) = CodeBlock::construct(context, end + 1)?;
-		Ok((end, Self { cond, code }))
+		static START_TOKEN: [TokenKind; 1] = [If];
+		let _ = tokens_match_kinds(&context.tokens[start..], &START_TOKEN)?;
+		let (cond_end, cond) = LogExpr::construct(context, start + START_TOKEN.len())?;
+		let (mut end, code) = CodeBlock::construct(context, cond_end)?;
+		let mut ret = Self {
+			cond_code: vec![(cond, code)],
+			else_code: None,
+		};
+		static ELSEIF_TOKENS: [TokenKind; 2] = [Else, If];
+		while let Ok(()) = tokens_match_kinds(&context.tokens[end..], &ELSEIF_TOKENS) {
+			let (cond_end, cond) = LogExpr::construct(context, end + ELSEIF_TOKENS.len())?;
+			let (code_end, code) = CodeBlock::construct(context, cond_end)?;
+			end = code_end;
+			ret.cond_code.push((cond, code));
+		}
+		static ELSE_TOKEN: [TokenKind; 1] = [Else];
+		if let Ok(()) = tokens_match_kinds(&context.tokens[end..], &ELSE_TOKEN) {
+			let (code_end, code) = CodeBlock::construct(context, end + ELSE_TOKEN.len())?;
+			end = code_end;
+			ret.else_code = Some(code);
+		}
+
+		Ok((end, ret))
 	}
 
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
-		self.cond.record_var_usage(context);
-		self.code.record_var_usage(context);
+		for (cond, code) in &mut self.cond_code {
+			cond.record_var_usage(context);
+			code.record_var_usage(context);
+		}
+		if let Some(else_statement) = self.else_code.as_mut() {
+			else_statement.record_var_usage(context);
+		}
 		None
 	}
 
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
-		match self.cond.precompute() {
-			None => {
-				self.cond.generate_source(context);
-				context.scope.save_state();
-				let jmp_inst_id = context.code().len() as Word - 1;
-				self.code.generate_source(context);
-				let out = &mut context.program.code;
-				context.scope.restore_state(out);
-
-				abbreviations::branch(jmp_inst_id, out.len() as Word, out);
+		let create_exit = |context: &mut CompileContext, exits: &mut Vec<Word>| {
+			exits.push(context.code().len() as Word);
+			context.emit(
+				&[Instruction {
+					mnemonic: Mnemonic::RelJmp,
+					..Default::default()
+				}],
+				None,
+			);
+		};
+		let mut exits = vec![];
+		for (cond, code) in &self.cond_code {
+			match cond.precompute() {
+				None => {
+					cond.generate_source(context);
+					let jmp_to_next_inst = context.code().len() as Word - 1;
+					context.scope.save_state();
+					code.generate_source(context);
+					create_exit(context, &mut exits);
+					let out = &mut context.program.code;
+					context.scope.restore_state(out);
+					abbreviations::branch(
+						jmp_to_next_inst,
+						context.code().len() as Word,
+						context.code(),
+					)
+				}
+				Some(0) => (),
+				Some(1) => {
+					code.generate_source(context);
+					create_exit(context, &mut exits);
+					break;
+				}
+				_ => unreachable!(),
 			}
-			Some(0) => (),
-			Some(1) => self.code.generate_source(context),
-			_ => unreachable!(),
+		}
+		if let Some(else_statement) = &self.else_code {
+			else_statement.generate_source(context);
+		}
+		for exit in exits {
+			abbreviations::branch(exit, context.code().len() as Word, context.code());
 		}
 	}
 }

@@ -28,10 +28,10 @@ impl<'a> Comparison<'a> {
 		use Condition::*;
 		use TokenKind::*;
 		match self.op.kind {
-			Less => ULs,
-			Greater => UGr,
-			LessEq => ULsEq,
-			GreaterEq => UGrEq,
+			Less => Ls,
+			Greater => Gr,
+			LessEq => LsEq,
+			GreaterEq => GrEq,
 			TokenKind::Eq => Condition::Eq,
 			_ => unreachable!(),
 		}

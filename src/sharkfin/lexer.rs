@@ -19,7 +19,7 @@ impl<'a> Lexer<'a> {
 		use TokenKind::*;
 		const EXACT_TOKENS: &[TokenKind] = &[
 			Semicolon, Plus, Minus, Mul, Div, LParen, RParen, LCurly, RCurly, NEq, Eq, Or, And,
-			Not, Less, Greater, LessEq, GreaterEq, Assign, Let, Func, If, While,
+			Not, Less, Greater, LessEq, GreaterEq, Assign, Let, Func, Else, If, While,
 		];
 
 		for &kind in EXACT_TOKENS {
@@ -123,6 +123,7 @@ pub(crate) enum TokenKind {
 	RParen,
 	LCurly,
 	RCurly,
+	Else,
 	If,
 	While,
 	Func,
@@ -157,6 +158,7 @@ impl TokenKind {
 			RParen => ")",
 			LCurly => "{",
 			RCurly => "}",
+			Else => "else",
 			If => "if",
 			While => "while",
 			Func => "func",

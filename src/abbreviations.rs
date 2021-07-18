@@ -61,5 +61,7 @@ pub(super) fn branch(instruction_index: Word, jmp_dest: Word, code: &mut Vec<Ins
 	debug_assert!(fits_in_const_inst(jmp_dist));
 
 	let [shift, a, b, c, d] = num_as_const_bytes(jmp_dist);
-	code[instruction_index as usize].args = [negated as u8, shift, a, b, c, d];
+	let inst = &mut code[instruction_index as usize];
+	debug_assert!(inst.mnemonic == Mnemonic::RelJmp);
+	inst.args = [negated as u8, shift, a, b, c, d];
 }

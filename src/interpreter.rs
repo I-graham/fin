@@ -80,13 +80,16 @@ impl<'a> FinProgram<'a> {
 						use std::io::Write;
 						print!(">");
 						io::stdout().flush().unwrap();
-						let mut cmd = Default::default();
+						let mut cmd = String::new();
 						io::stdin().read_line(&mut cmd).unwrap();
 						if cmd.starts_with("exit") {
 							throw_error("Early exit", ip as usize, instruction);
 						} else if let Some(num) = cmd.strip_prefix("skip:") {
-							match num.parse::<Word>() {
-								Ok(dist) => data.regs.ip += dist - 1,
+							match num.parse::<i64>() {
+								Ok(dist) => {
+									data.regs.ip =
+										data.regs.ip.wrapping_add(dist.wrapping_sub(1) as Word)
+								}
 								Err(err) => println!("Unable to parse command: `{:?}`", err),
 							}
 						} else if cmd.trim() == "" {
@@ -100,7 +103,7 @@ impl<'a> FinProgram<'a> {
 			if let Err(msg) = data.exec_instruction(instruction) {
 				self.throw_error(msg, ip);
 			}
-			data.regs.ip += 1;
+			data.regs.ip = data.regs.ip.wrapping_add(1);
 		}
 	}
 
@@ -197,6 +200,44 @@ impl<'a> FinProgram<'a> {
 			.wrapping_add(1)
 			.wrapping_add(ip as Word)
 		};
+
+		let elim_inst = |inst: Instruction| {
+			inst.condition == Condition::Nev
+				|| inst.mnemonic == Mnemonic::RelJmp && inst.args == [0; 6]
+				|| inst.mnemonic == Mnemonic::Nop
+		};
+
+		let mut modified_code = true;
+		while modified_code {
+			modified_code = false;
+			let mut ip = 0;
+			while ip < self.code.len() {
+				let inst = self.code[ip];
+				if elim_inst(inst) {
+					modified_code = true;
+					self.code.remove(ip);
+					for early in 0..self.code.len() {
+						let early_inst = self.code[early];
+						let inst_moved = early >= ip;
+						let old_early = early + inst_moved as usize;
+						let old_dest = get_jmp_dest(early_inst, old_early);
+						if early_inst.mnemonic == Mnemonic::RelJmp
+							&& (old_early >= ip) != (old_dest >= ip as Word)
+						{
+							let new_dest = if inst_moved && old_dest != ip as Word {
+								old_dest - 1
+							} else {
+								old_dest
+							};
+							abbreviations::branch(early as Word, new_dest, &mut self.code);
+						}
+					}
+				} else {
+					ip += 1;
+				}
+			}
+		}
+
 		for ip in 0..self.code.len() {
 			let inst = self.code[ip];
 			if inst.mnemonic == Mnemonic::RelJmp {
@@ -210,27 +251,6 @@ impl<'a> FinProgram<'a> {
 					abbreviations::branch(ip as Word, jmp_dest, &mut self.code);
 					jmp_dest_inst = self.code[jmp_dest as usize];
 				}
-			}
-		}
-		let mut ip = 0;
-		while ip < self.code.len() {
-			let inst = self.code[ip];
-			if inst.mnemonic == Mnemonic::RelJmp && inst.args == [0; 6] {
-				self.code.remove(ip);
-				for early in 0..self.code.len() {
-					let early_inst = self.code[early];
-					let inst_moved = early >= ip;
-					let old_early = early + inst_moved as usize;
-					let old_dest = get_jmp_dest(early_inst, old_early);
-					if early_inst.mnemonic == Mnemonic::RelJmp
-						&& (old_early >= ip) != (old_dest >= ip as Word)
-					{
-						let new_dest = if inst_moved { old_dest } else { old_dest - 1 };
-						abbreviations::branch(early as Word, new_dest, &mut self.code);
-					}
-				}
-			} else {
-				ip += 1;
 			}
 		}
 	}
