@@ -1,5 +1,7 @@
+use super::abbreviations;
 use super::bytecode::*;
 use super::runtime_error::*;
+use std::io;
 
 pub const REGISTERS: u8 = 16;
 
@@ -21,11 +23,11 @@ impl<'a> FinProgram<'a> {
 		let slice_to_int = |bytes: &[u8]| Word::from_le_bytes(bytes[..].try_into().unwrap());
 
 		use std::convert::TryInto;
-		let src_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
+		let src_size = slice_to_int(read_n_bytes(8)) as usize;
 		let source = std::str::from_utf8(&read_n_bytes(src_size)).expect("Malformed bytecode!");
-		let debug_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
-		let debug = read_n_bytes(debug_size)
-			.chunks_exact(24)
+		let debug_size = slice_to_int(read_n_bytes(8)) as usize;
+		let debug = read_n_bytes(debug_size * 8 * 3)
+			.chunks_exact(8 * 3)
 			.map(|bytes| {
 				(
 					slice_to_int(&bytes[0..8])..slice_to_int(&bytes[8..16]),
@@ -33,13 +35,13 @@ impl<'a> FinProgram<'a> {
 				)
 			})
 			.collect::<Vec<_>>();
-		let data_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
-		let program_data = read_n_bytes(data_size)
+		let data_size = slice_to_int(read_n_bytes(8)) as usize;
+		let program_data = read_n_bytes(data_size * 8)
 			.chunks_exact(8)
 			.map(slice_to_int)
 			.collect::<Vec<_>>();
-		let code_size = Word::from_le_bytes(read_n_bytes(8).try_into().unwrap()) as usize;
-		let code = read_n_bytes(code_size)
+		let code_size = slice_to_int(read_n_bytes(8)) as usize;
+		let code = read_n_bytes(code_size * 8)
 			.chunks_exact(8)
 			.map(|bytes| Instruction::from_raw(bytes[..].try_into().unwrap()))
 			.collect::<Vec<_>>();
@@ -53,101 +55,52 @@ impl<'a> FinProgram<'a> {
 		}
 	}
 
-	pub(crate) fn execute(&self) {
+	pub(crate) fn execute(&self, debug: bool) {
 		let mut data = Data {
 			program_data: self.program_data.clone(),
-			stack: vec![],
+			..Default::default()
 		};
-		let mut reg = RegisterData::default();
 
-		while reg.ip < self.code.len() as Word {
-			let instruction = self.code[reg.ip as usize];
-			if reg.cond_matches(instruction.condition) {
-				use Mnemonic::*;
-				match instruction.mnemonic {
-					Nop => (),
-					Dbg => println!("{:?}\n{:?}", &reg, &data),
-					Inc => *reg.write_gp(instruction.args[0]) += 1,
-					Load => {
-						*reg.write_gp(instruction.args[1]) =
-							data.read_addr(reg.read_gp(instruction.args[0]))
-					}
-					StkLd => {
-						*reg.write_gp(instruction.args[1]) =
-							data.read_addr(reg.bp + reg.read_gp(instruction.args[0]))
-					}
-					Const => {
-						use std::convert::TryInto;
-						*reg.write_gp(instruction.args[0]) =
-							(u32::from_le_bytes(instruction.args[2..6].try_into().unwrap())
-								as Word) << (instruction.args[1] as Word);
-					}
-					Store => {
-						*data.write_addr(reg.read_gp(instruction.args[1])) =
-							reg.read_gp(instruction.args[0])
-					}
-					StkStr => {
-						*data.write_addr(reg.bp + reg.read_gp(instruction.args[1])) =
-							reg.read_gp(instruction.args[0])
-					}
-					Push => data.stack.push(reg.read_gp(instruction.args[0])),
-					PushAll => {
-						for i in instruction.args[0]..instruction.args[1] {
-							data.stack.push(reg.read_gp(i));
-						}
-					}
-					Pop => {
-						*reg.write_gp(instruction.args[0]) = data.stack.pop().expect("Empty stack");
-					}
-					PopAll => {
-						for i in instruction.args[0]..instruction.args[1] {
-							*reg.write_gp(i) = data.stack.pop().expect("Empty stack");
-						}
-					}
-					Puts => {
-						unimplemented!()
-					}
-					Or => {
-						*reg.write_gp(instruction.args[0]) =
-							reg.read_gp(instruction.args[1]) | reg.read_gp(instruction.args[2]);
-					}
-					Xor => {
-						*reg.write_gp(instruction.args[0]) =
-							reg.read_gp(instruction.args[1]) ^ reg.read_gp(instruction.args[2]);
-					}
-					Add => {
-						*reg.write_gp(instruction.args[0]) = reg
-							.read_gp(instruction.args[1])
-							.wrapping_add(reg.read_gp(instruction.args[2]));
-					}
-					Sub => {
-						*reg.write_gp(instruction.args[0]) = reg
-							.read_gp(instruction.args[1])
-							.wrapping_sub(reg.read_gp(instruction.args[2]));
-					}
-					Mul => {
-						*reg.write_gp(instruction.args[0]) = reg
-							.read_gp(instruction.args[1])
-							.wrapping_mul(reg.read_gp(instruction.args[2]));
-					}
-					Div => {
-						let divisor = reg.read_gp(instruction.args[2]) as i64;
-						if divisor != 0 {
-							*reg.write_gp(instruction.args[0]) =
-								(reg.read_gp(instruction.args[1]) as i64 / divisor) as Word;
+		while data.regs.ip < self.code.len() as Word {
+			let ip = data.regs.ip;
+			let instruction = self.code[ip as usize];
+			if debug {
+				print!(
+					"cond: {}\ninstruction: \n{}\ndata: \n{:?}\n",
+					if data.regs.cond_matches(instruction.condition) {
+						"matches"
+					} else {
+						"does not match"
+					},
+					instruction.as_string(),
+					&data
+				);
+				if ip < self.code.len() as Word - 1 {
+					loop {
+						use std::io::Write;
+						print!(">");
+						io::stdout().flush().unwrap();
+						let mut cmd = Default::default();
+						io::stdin().read_line(&mut cmd).unwrap();
+						if cmd.starts_with("exit") {
+							throw_error("Early exit", ip as usize, instruction);
+						} else if let Some(num) = cmd.strip_prefix("skip:") {
+							match num.parse::<Word>() {
+								Ok(dist) => data.regs.ip += dist - 1,
+								Err(err) => println!("Unable to parse command: `{:?}`", err),
+							}
+						} else if cmd.trim() == "" {
+							break;
 						} else {
-							self.throw_error("Division by zero!", reg.ip);
+							println!("Unknown Command `{}`", cmd);
 						}
-					}
-					Mov => {
-						*reg.write_gp(instruction.args[1]) = reg.read_gp(instruction.args[0]);
-					}
-					Hlt => {
-						std::process::exit(reg.read_gp(instruction.args[0]) as i32);
 					}
 				}
 			}
-			reg.ip += 1;
+			if let Err(msg) = data.exec_instruction(instruction) {
+				self.throw_error(msg, ip);
+			}
+			data.regs.ip += 1;
 		}
 	}
 
@@ -234,71 +187,150 @@ impl<'a> FinProgram<'a> {
 		output
 	}
 
+	pub(crate) fn post_process(&mut self) {
+		let get_jmp_dest = |inst: Instruction, ip: usize| {
+			if inst.args[0] != 0 {
+				inst.args_as_const().wrapping_neg()
+			} else {
+				inst.args_as_const()
+			}
+			.wrapping_add(1)
+			.wrapping_add(ip as Word)
+		};
+		for ip in 0..self.code.len() {
+			let inst = self.code[ip];
+			if inst.mnemonic == Mnemonic::RelJmp {
+				let mut jmp_dest = get_jmp_dest(inst, ip);
+				let mut jmp_dest_inst = self.code[jmp_dest as usize];
+				while jmp_dest_inst.mnemonic == Mnemonic::RelJmp
+					&& jmp_dest != ip as Word
+					&& inst.condition.implies(jmp_dest_inst.condition)
+				{
+					jmp_dest = get_jmp_dest(jmp_dest_inst, jmp_dest as usize);
+					abbreviations::branch(ip as Word, jmp_dest, &mut self.code);
+					jmp_dest_inst = self.code[jmp_dest as usize];
+				}
+			}
+		}
+		let mut ip = 0;
+		while ip < self.code.len() {
+			let inst = self.code[ip];
+			if inst.mnemonic == Mnemonic::RelJmp && inst.args == [0; 6] {
+				self.code.remove(ip);
+				for early in 0..self.code.len() {
+					let early_inst = self.code[early];
+					let inst_moved = early >= ip;
+					let old_early = early + inst_moved as usize;
+					let old_dest = get_jmp_dest(early_inst, old_early);
+					if early_inst.mnemonic == Mnemonic::RelJmp
+						&& (old_early >= ip) != (old_dest >= ip as Word)
+					{
+						let new_dest = if inst_moved { old_dest } else { old_dest - 1 };
+						abbreviations::branch(early as Word, new_dest, &mut self.code);
+					}
+				}
+			} else {
+				ip += 1;
+			}
+		}
+	}
+
 	fn throw_error(&self, msg: &str, ip: Word) -> ! {
 		if let Some(debug) = &self.debug_info {
 			debug.throw_with_debug_info(msg, ip);
 		} else {
-			throw_error(msg, ip as usize, &self.code[ip as usize]);
+			throw_error(msg, ip as usize, self.code[ip as usize]);
 		};
 	}
 }
 
 #[derive(Debug, Default)]
-struct RegisterData {
-	ip: Word,
-	bp: Word,
-	cmp: u8,
-	gp: [Word; REGISTERS as usize],
-}
-
-impl RegisterData {
-	const GREATER_MASK: u8 = 1 << 0;
-	const LESS_MASK: u8 = 1 << 1;
-	const EQ_MASK: u8 = 1 << 2;
-	const UNSIGNED_GREATER_MASK: u8 = 1 << 3;
-	const UNSIGNED_LESS_MASK: u8 = 1 << 4;
-
-	fn cond_matches(&self, cond: Condition) -> bool {
-		let greater = self.cmp & Self::GREATER_MASK;
-		let less = self.cmp & Self::LESS_MASK;
-		let equal = self.cmp & Self::EQ_MASK;
-		let unsigned_greater = self.cmp & Self::UNSIGNED_GREATER_MASK;
-		let unsigned_less = self.cmp & Self::UNSIGNED_LESS_MASK;
-
-		use Condition::*;
-		match cond {
-			Al => true,
-			Eq => equal != 0,
-			NEq => equal == 0,
-			Gr => greater != 0,
-			Ls => less != 0,
-			GrEq => less == 0,
-			LsEq => greater == 0,
-			UGr => unsigned_greater != 0,
-			ULs => unsigned_less != 0,
-			UGrEq => unsigned_less == 0,
-			ULsEq => unsigned_greater == 0,
-		}
-	}
-
-	fn read_gp(&self, register: u8) -> Word {
-		assert!(register < REGISTERS);
-		self.gp[register as usize]
-	}
-
-	fn write_gp(&mut self, register: u8) -> &mut Word {
-		assert!(register < REGISTERS);
-		&mut self.gp[register as usize]
-	}
-}
-
-#[derive(Debug)]
 struct Data {
 	pub(crate) program_data: Vec<Word>,
 	pub(crate) stack: Vec<Word>,
+	pub(crate) regs: RegisterData,
 }
 
 impl Data {
+	pub fn exec_instruction(&mut self, inst: Instruction) -> Result<(), &str> {
+		let args = &inst.args;
+		if self.regs.cond_matches(inst.condition) {
+			use Mnemonic::*;
+			match inst.mnemonic {
+				Nop => (),
+				Dbg => println!("{:?}\n{:?}", &self.regs, &self),
+				Inc => *self.regs.write_gp(args[0]) += 1,
+				Load => *self.regs.write_gp(args[1]) = self.read_addr(self.regs.read_gp(args[0])),
+				StkLd => {
+					let addr = self.regs.bp + inst.args_as_const() as Word;
+					*self.regs.write_gp(args[0]) = self.read_addr(addr);
+				}
+				Const => {
+					*self.regs.write_gp(args[0]) = inst.args_as_const() as Word;
+				}
+				Store => *self.write_addr(self.regs.read_gp(args[1])) = self.regs.read_gp(args[0]),
+				StkStr => {
+					let addr = self.regs.bp + inst.args_as_const() as Word;
+					*self.write_addr(addr) = self.regs.read_gp(args[0]);
+				}
+				Push => self.stack.push(self.regs.read_gp(args[0])),
+				Pop => {
+					*self.regs.write_gp(args[0]) = self.stack.pop().expect("Empty stack");
+				}
+				Puts => {
+					unimplemented!()
+				}
+				Or => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = a | b;
+				}
+				Xor => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = a ^ b;
+				}
+				Add => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = a.wrapping_add(b);
+				}
+				Sub => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = a.wrapping_sub(b);
+				}
+				Mul => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = a.wrapping_mul(b);
+				}
+				Div => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					if b != 0 {
+						*self.regs.write_gp(args[0]) = (a / b) as Word;
+					} else {
+						return Err("Division by zero!");
+					}
+				}
+				Mov => {
+					*self.regs.write_gp(args[1]) = self.regs.read_gp(args[0]);
+				}
+				Cmp => {
+					let [a, b] = self.regs.map_to_gps(&[args[0], args[1]]);
+					self.regs.set_cond(a, b);
+				}
+				RelJmp => {
+					let const_val = inst.args_as_const() as u64;
+					self.regs.ip = self.regs.ip.wrapping_add(if args[0] != 0 {
+						const_val.wrapping_neg()
+					} else {
+						const_val
+					});
+				}
+				Hlt => {
+					std::process::exit(self.regs.read_gp(args[0]) as i32);
+				}
+			}
+		}
+		Ok(())
+	}
+
 	fn read_addr(&self, address: Word) -> Word {
 		//If the first bit is a 1, then the value is fetched from program_data
 		let program_data_bit = address & (1 << (Word::BITS - 1));
@@ -323,5 +355,83 @@ impl Data {
 			assert!(address < self.stack.len() as Word);
 			&mut self.stack[address as usize]
 		}
+	}
+}
+
+#[derive(Debug, Default)]
+struct RegisterData {
+	ip: Word,
+	bp: Word,
+	cmp: u8,
+	gp: [Word; REGISTERS as usize],
+}
+
+impl RegisterData {
+	const GREATER_MASK: u8 = 1 << 0;
+	const LESS_MASK: u8 = 1 << 1;
+	const EQ_MASK: u8 = 1 << 2;
+	const UNSIGNED_GREATER_MASK: u8 = 1 << 3;
+	const UNSIGNED_LESS_MASK: u8 = 1 << 4;
+
+	fn map_to_gps<const N: usize>(&self, regs: &[u8; N]) -> [Word; N] {
+		let mut out = [0; N];
+		for (i, reg) in regs.iter().enumerate() {
+			out[i] = self.read_gp(*reg);
+		}
+		out
+	}
+
+	fn set_cond(&mut self, a: Word, b: Word) {
+		self.cmp = 0;
+		let mut set_bit = |bit| self.cmp |= bit;
+		use std::cmp::Ordering::*;
+		if a == b {
+			set_bit(Self::EQ_MASK);
+		} else {
+			match a.cmp(&b) {
+				Less => set_bit(Self::UNSIGNED_LESS_MASK),
+				Greater => set_bit(Self::UNSIGNED_GREATER_MASK),
+				_ => (),
+			}
+			match (a as i64).cmp(&(b as i64)) {
+				Less => set_bit(Self::LESS_MASK),
+				Greater => set_bit(Self::GREATER_MASK),
+				_ => (),
+			}
+		}
+	}
+
+	fn cond_matches(&self, cond: Condition) -> bool {
+		let greater = self.cmp & Self::GREATER_MASK;
+		let less = self.cmp & Self::LESS_MASK;
+		let equal = self.cmp & Self::EQ_MASK;
+		let unsigned_greater = self.cmp & Self::UNSIGNED_GREATER_MASK;
+		let unsigned_less = self.cmp & Self::UNSIGNED_LESS_MASK;
+
+		use Condition::*;
+		match cond {
+			Al => true,
+			Nev => false,
+			Eq => equal != 0,
+			NEq => equal == 0,
+			Gr => greater != 0,
+			Ls => less != 0,
+			GrEq => less == 0,
+			LsEq => greater == 0,
+			UGr => unsigned_greater != 0,
+			ULs => unsigned_less != 0,
+			UGrEq => unsigned_less == 0,
+			ULsEq => unsigned_greater == 0,
+		}
+	}
+
+	fn read_gp(&self, register: u8) -> Word {
+		assert!(register < REGISTERS);
+		self.gp[register as usize]
+	}
+
+	fn write_gp(&mut self, register: u8) -> &mut Word {
+		assert!(register < REGISTERS);
+		&mut self.gp[register as usize]
 	}
 }

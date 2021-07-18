@@ -1,6 +1,5 @@
 #[macro_use]
 mod nodes;
-mod abbreviations;
 mod compile_error;
 mod lexer;
 mod vars;
@@ -15,9 +14,8 @@ use vars::FunctionScope;
 struct CompileContext<'a> {
 	tokens: Vec<Token<'a>>,
 	scope: FunctionScope<'a>,
-	output: FinProgram<'a>,
+	program: FinProgram<'a>,
 	error: CompileError<'a>,
-	debug_info: DebugInfo<'a>,
 }
 
 impl<'a> CompileContext<'a> {
@@ -43,45 +41,48 @@ impl<'a> CompileContext<'a> {
 			tokens,
 			error,
 			scope: Default::default(),
-			output: Default::default(),
-			debug_info: DebugInfo {
-				source,
-				line_ranges: Default::default(),
+			program: FinProgram {
+				debug_info: Some(DebugInfo {
+					source,
+					line_ranges: Default::default(),
+				}),
+				..Default::default()
 			},
 		}
 	}
 
+	fn code(&mut self) -> &mut Vec<Instruction> {
+		&mut self.program.code
+	}
+
 	//token most nearly associated with code emitted, used for creation of debug info
 	pub(super) fn emit(&mut self, code: &[Instruction], associated_token: Option<Token<'a>>) {
-		self.output.code.extend(code);
+		self.program.code.extend(code);
 		self.update_debug_info(associated_token);
 	}
 
 	pub(super) fn update_debug_info(&mut self, associated_token: Option<Token<'a>>) {
 		let line_no = associated_token.map(|token| token.line).unwrap_or(0) as u64;
-		let code_len = self.output.code.len() as u64;
-		self.debug_info.emitted_code(code_len, line_no);
+		let code_len = self.program.code.len() as u64;
+		self.program
+			.debug_info
+			.as_mut()
+			.unwrap()
+			.emitted_code(code_len, line_no);
 	}
 }
 
 pub(crate) fn compile_sharkfin(source: &str) -> FinProgram {
-	use nodes::ASTNode;
+	use nodes::{ASTNode, ProgramRoot};
 
 	let mut context = CompileContext::new(source);
-	match nodes::ProgramRoot::construct(&mut context, 0) {
-		Ok((_, ast)) => {
+	match ProgramRoot::construct(&mut context, 0) {
+		Ok((_, mut ast)) => {
 			ast.record_var_usage(&mut context);
+			context.scope.cleanup();
 			ast.generate_source(&mut context);
-
-			let CompileContext {
-				output: mut program,
-				debug_info,
-				..
-			} = context;
-
-			program.debug_info = Some(debug_info);
-			println!("\n{}", program.dissassemble());
-			program.execute();
+			let mut program = context.program;
+			program.post_process();
 			program
 		}
 		Err((token, suggestions)) => {

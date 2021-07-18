@@ -18,7 +18,8 @@ impl<'a> Lexer<'a> {
 	pub(crate) fn advance_token(&mut self) -> Result<Token<'a>, String> {
 		use TokenKind::*;
 		const EXACT_TOKENS: &[TokenKind] = &[
-			Semicolon, Plus, Minus, Mul, Div, LParen, RParen, LCurly, RCurly, Eq, Assign, Let, Func,
+			Semicolon, Plus, Minus, Mul, Div, LParen, RParen, LCurly, RCurly, NEq, Eq, Or, And,
+			Not, Less, Greater, LessEq, GreaterEq, Assign, Let, Func, If, While,
 		];
 
 		for &kind in EXACT_TOKENS {
@@ -109,13 +110,23 @@ pub(crate) enum TokenKind {
 	Minus,
 	Mul,
 	Div,
+	Less,
+	Greater,
+	LessEq,
+	GreaterEq,
+	NEq,
+	Eq,
+	Or,
+	And,
+	Not,
 	LParen,
 	RParen,
 	LCurly,
 	RCurly,
+	If,
+	While,
 	Func,
 	Let,
-	Eq,
 	Semicolon,
 }
 
@@ -133,13 +144,23 @@ impl TokenKind {
 			Minus => "-",
 			Mul => "*",
 			Div => "/",
+			Less => "<",
+			Greater => ">",
+			LessEq => "<=",
+			GreaterEq => ">=",
+			NEq => "!=",
+			Eq => "==",
+			Or => "||",
+			And => "&&",
+			Not => "!",
 			LParen => "(",
 			RParen => ")",
 			LCurly => "{",
 			RCurly => "}",
+			If => "if",
+			While => "while",
 			Func => "func",
 			Let => "let",
-			Eq => "==",
 			Semicolon => ";",
 		}
 	}

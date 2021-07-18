@@ -1,6 +1,6 @@
 {
-	let Int x = 1;
-	x = 3;
-	x = x + 1;
-	let Int y = x;
+	let Int x = 0;
+	while x < 5 || x < 8 {
+		x = x + 1;
+	}
 }

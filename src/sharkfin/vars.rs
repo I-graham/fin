@@ -1,20 +1,25 @@
-use super::abbreviations;
+use crate::abbreviations;
 use crate::bytecode::*;
 use crate::interpreter::*;
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashMap;
 use std::ops::Range;
 
-#[derive(Debug, Default)]
+type RegisterMap<'a> = [Option<VariableID<'a>>; REGISTERS as usize];
+type StackMap<'a> = Vec<Option<VariableID<'a>>>;
+
+#[derive(Default)]
 pub(super) struct FunctionScope<'a> {
-	framepointer: Word,
 	id_counter: usize,
-	stack_size: Word,
+	//usize used to order intervals
 	//bool is true at last usage / if variable has been used before (false on creation, true elsewhere)
 	intervals: (usize, FnvHashMap<VariableID<'a>, Range<usize>>),
 	synonyms: FnvHashMap<VariableID<'a>, VariableID<'a>>,
 	variables: FnvHashMap<VariableID<'a>, Variable>,
-	registers: [Option<VariableID<'a>>; REGISTERS as usize],
-	recorders: Vec<FnvHashSet<VariableID<'a>>>,
+	registers: RegisterMap<'a>,
+	stack: StackMap<'a>,
+	saved_reg_states: Vec<(RegisterMap<'a>, StackMap<'a>)>,
+	//bool is true if variable is new
+	recorders: Vec<FnvHashMap<VariableID<'a>, bool>>,
 }
 
 impl<'a> FunctionScope<'a> {
@@ -36,20 +41,37 @@ impl<'a> FunctionScope<'a> {
 		let mut out = [VariableID::Unnamed(0); N];
 		for (i, &(name, ty)) in info.iter().enumerate() {
 			let id = self.create_id(name);
-			self.intervals.1.insert(id, 0..0);
-			self.variables.insert(
-				id,
-				Variable {
-					location: Location::Nowhere,
-					ty,
-				},
-			);
+			for set in &mut self.recorders {
+				set.insert(id, true);
+			}
+
+			match self.variables.get_mut(&id) {
+				Some(var) => {
+					var.in_scope = true;
+					self.record_usage(&[id]);
+				}
+				None => {
+					self.intervals.1.insert(id, 0..0);
+					self.variables.insert(
+						id,
+						Variable {
+							location: Location::Nowhere,
+							stack_loc: None,
+							ty,
+							in_scope: true,
+						},
+					);
+				}
+			}
 			out[i] = id;
 		}
 		out
 	}
 
-	pub fn record_usage(&mut self, ids: &[VariableID<'a>]) {
+	pub fn record_usage<'l, I: IntoIterator<Item = &'l VariableID<'a>>>(&mut self, ids: I)
+	where
+		'a: 'l,
+	{
 		self.intervals.0 += 1;
 		let usage_num = self.intervals.0;
 		for id in ids {
@@ -60,33 +82,31 @@ impl<'a> FunctionScope<'a> {
 			}
 			var.end = usage_num;
 			for recorder in &mut self.recorders {
-				recorder.insert(base_id);
+				recorder.entry(base_id).or_insert(false);
 			}
 		}
 	}
 
-	pub fn register<const N: usize>(
+	//Used to place variables from an iterator into registers exclusively for performance reasons.
+	//Does not return locations of variables.
+	pub fn place_from_iter<'l, I: IntoIterator<Item = &'l VariableID<'a>>>(
+		&mut self,
+		ids: I,
+		out: &mut Vec<Instruction>,
+	) where
+		'a: 'l,
+	{
+		for (i, var) in ids.into_iter().enumerate() {
+			debug_assert!(i < REGISTERS.into());
+			self.place_vars(&[*var], out);
+		}
+	}
+
+	pub fn place_vars<const N: usize>(
 		&mut self,
 		ids: &[VariableID<'a>; N],
 		out: &mut Vec<Instruction>,
 	) -> [u8; N] {
-		let move_var_from_stack = |var: &mut Variable, reg_id, out: &mut Vec<Instruction>| {
-			if let Location::Stack(addr) = var.location {
-				if addr.leading_zeros() + addr.trailing_zeros() < Word::BITS / 2 {
-					unimplemented!(
-						"Number of variables in single function must fit within 64 bits!"
-					);
-				}
-				abbreviations::load_const(addr, reg_id, None, out);
-				out.extend(&[Instruction {
-					condition: Condition::Al,
-					mnemonic: Mnemonic::StkLd,
-					args: [reg_id, reg_id, 0, 0, 0, 0],
-				}]);
-			}
-			var.location = Location::Register(reg_id);
-		};
-
 		debug_assert!(N < REGISTERS.into());
 
 		for id in ids.iter() {
@@ -98,6 +118,9 @@ impl<'a> FunctionScope<'a> {
 						self.synonyms.retain(|_, v| v != var);
 						if let Location::Register(reg) = dead_var.location {
 							self.registers[reg as usize] = None;
+						}
+						if let Some(addr) = dead_var.stack_loc {
+							self.stack[addr] = None;
 						}
 					}
 				}
@@ -121,9 +144,8 @@ impl<'a> FunctionScope<'a> {
 
 			for (reg_id, reg) in self.registers.iter_mut().enumerate() {
 				if reg.is_none() {
-					let var = self.variables.get_mut(&base_id).unwrap();
 					*reg = Some(base_id);
-					move_var_from_stack(var, reg_id as u8, out);
+					self.load_var(base_id, reg_id as u8, out);
 					opregs[i] = reg_id as u8;
 					continue 'place_reg;
 				}
@@ -149,18 +171,9 @@ impl<'a> FunctionScope<'a> {
 			let replaced = self.variables.get_mut(&replaced_id).unwrap();
 
 			if let Location::Register(reg) = replaced.location {
-				self.registers[reg as usize] = Some(base_id);
-				replaced.location = Location::Stack(self.stack_size);
-				self.stack_size += 1;
+				self.spill_var(replaced_id, out);
+				self.load_var(base_id, reg, out);
 
-				out.extend(&[Instruction {
-					condition: Condition::Al,
-					mnemonic: Mnemonic::Push,
-					args: [reg, 0, 0, 0, 0, 0],
-				}]);
-
-				let var = self.variables.get_mut(&base_id).unwrap();
-				move_var_from_stack(var, reg, out);
 				opregs[i] = reg;
 				continue 'place_reg;
 			} else {
@@ -172,23 +185,168 @@ impl<'a> FunctionScope<'a> {
 		opregs
 	}
 
+	pub fn cleanup(&mut self) {
+		let intervals = &mut self.intervals.1;
+		self.variables.retain(|id, _| intervals[id].end > 0);
+		let variables = &mut self.variables;
+		self.synonyms.retain(|_, v| variables.contains_key(&v));
+	}
+
 	pub fn get_var(&self, name: &'a str) -> Option<VariableID<'a>> {
 		let id = VariableID::Named(name);
 		if self.synonyms.contains_key(&id) || self.variables.contains_key(&id) {
-			Some(self.get_base_id(id))
-		} else {
-			None
+			let base = self.get_base_id(id);
+			if self.variables[&base].in_scope {
+				return Some(base);
+			}
+		}
+		None
+	}
+
+	pub fn spill_all<F: FnMut(VariableID) -> bool>(
+		&mut self,
+		mut predicate: F,
+		out: &mut Vec<Instruction>,
+	) {
+		for _ in 0..self.registers.len() {
+			if let Some(id) = self
+				.registers
+				.iter()
+				.filter_map(|&v| v)
+				.filter(|&id| predicate(id))
+				.max_by_key(|id| self.intervals.1.get(id).map(|range| range.end).unwrap_or(0))
+			{
+				self.spill_var(id, out);
+			}
 		}
 	}
 
-/*	pub fn push_recorder(&mut self) {
+	pub fn open_scope(&mut self) {
 		self.recorders.push(Default::default());
 	}
 
-	pub fn pop_recorder(&mut self) -> FnvHashSet<VariableID<'a>> {
-		self.recorders.pop().expect("Popped empty stack!")
+	pub fn close_scope(&mut self) -> FnvHashMap<VariableID<'a>, bool> {
+		let scope = self.recorders.pop().expect("Popped empty stack!");
+		for var_id in scope
+			.iter()
+			.filter_map(|(id, new)| if *new { Some(*id) } else { None })
+		{
+			let base = self.get_base_id(var_id);
+			self.variables.get_mut(&base).unwrap().in_scope = false;
+		}
+		scope
 	}
-*/
+
+	pub fn save_state(&mut self) {
+		for i in 0..REGISTERS as usize {
+			if self.registers[i].filter(|id| self.exists(*id)).is_none() {
+				self.registers[i] = None;
+			}
+		}
+		self.saved_reg_states
+			.push((self.registers, self.stack.clone()));
+	}
+
+	pub fn restore_state(&mut self, out: &mut Vec<Instruction>) {
+		let (regs, stack) = self.saved_reg_states.pop().expect("Popped unsaved state!");
+		for (stack_var, curr_var) in stack.iter().zip(self.stack.iter()) {
+			debug_assert_eq!(stack_var, curr_var);
+		}
+
+		for (i, goal) in regs.iter().enumerate() {
+			match self.registers[i].filter(|id| self.exists(*id)) {
+				Some(old_var) => match goal.filter(|&id| self.exists(id)) {
+					Some(new_var) if new_var != old_var => {
+						self.spill_var(old_var, out);
+						self.load_var(new_var, i as u8, out);
+					}
+					None => self.spill_var(old_var, out),
+					_ => (),
+				},
+				None => {
+					if let Some(new_var) = goal.filter(|id| self.exists(*id)) {
+						self.load_var(new_var, i as u8, out);
+					}
+				}
+			}
+		}
+	}
+
+	fn load_var(&mut self, var_id: VariableID<'a>, register: u8, out: &mut Vec<Instruction>) {
+		let base_id = self.get_base_id(var_id);
+		self.registers[register as usize] = Some(base_id);
+		let var = self.variables.get_mut(&base_id).unwrap();
+		match var.location {
+			Location::Stack(addr) => {
+				self.stack[addr as usize] = None;
+				if addr as usize == self.stack.len() - 1 {
+					out.extend(&[Instruction {
+						condition: Condition::Al,
+						mnemonic: Mnemonic::Pop,
+						args: [register, 0, 0, 0, 0, 0],
+					}]);
+				} else if abbreviations::fits_in_const_inst(addr) {
+					debug_assert!(abbreviations::fits_in_const_inst(addr as Word));
+					let [shift, a, b, c, d] = abbreviations::num_as_const_bytes(addr as Word);
+					out.extend(&[Instruction {
+						condition: Condition::Al,
+						mnemonic: Mnemonic::StkLd,
+						args: [register, shift, a, b, c, d],
+					}]);
+				} else {
+					unimplemented!(
+						"Number of variables in single function must fit within 64 bits!"
+					);
+				}
+			}
+			Location::Register(reg) if reg != register => {
+				self.registers[reg as usize] = None;
+				out.extend(&[Instruction {
+					condition: Condition::Al,
+					mnemonic: Mnemonic::Mov,
+					args: [reg, register, 0, 0, 0, 0],
+				}]);
+			}
+			_ => (),
+		}
+		var.location = Location::Register(register);
+	}
+
+	fn spill_var(&mut self, var_id: VariableID<'a>, out: &mut Vec<Instruction>) {
+		let base_id = self.get_base_id(var_id);
+		let var = self.variables.get_mut(&base_id).unwrap();
+		if let Location::Register(reg) = var.location {
+			self.registers[reg as usize] = None;
+			let addr = if let Some(addr) = var.stack_loc {
+				addr
+			} else {
+				self.stack
+					.iter()
+					.enumerate()
+					.find_map(|(i, id)| if id.is_none() { Some(i) } else { None })
+					.unwrap_or(self.stack.len())
+			};
+			var.location = Location::Stack(addr as Word);
+
+			if addr == self.stack.len() {
+				self.stack.push(Some(base_id));
+				out.extend(&[Instruction {
+					condition: Condition::Al,
+					mnemonic: Mnemonic::Push,
+					args: [reg, 0, 0, 0, 0, 0],
+				}]);
+			} else {
+				debug_assert!(abbreviations::fits_in_const_inst(addr as Word));
+				self.stack[addr] = Some(base_id);
+				let [shift, a, b, c, d] = abbreviations::num_as_const_bytes(addr as Word);
+				out.extend(&[Instruction {
+					condition: Condition::Al,
+					mnemonic: Mnemonic::StkStr,
+					args: [reg, shift, a, b, c, d],
+				}]);
+			}
+		}
+	}
 
 	fn create_id(&mut self, name: Option<&'a str>) -> VariableID<'a> {
 		if let Some(varname) = name {
@@ -199,10 +357,15 @@ impl<'a> FunctionScope<'a> {
 		}
 	}
 
+	fn exists(&self, var_id: VariableID<'a>) -> bool {
+		let base = *self.synonyms.get(&var_id).unwrap_or(&var_id);
+		self.variables.contains_key(&base)
+	}
+
 	fn get_base_id(&self, id: VariableID<'a>) -> VariableID<'a> {
-		let out = *self.synonyms.get(&id).unwrap_or(&id);
-		debug_assert!(self.variables.contains_key(&out));
-		out
+		let base = *self.synonyms.get(&id).unwrap_or(&id);
+		debug_assert!(self.variables.contains_key(&base));
+		base
 	}
 }
 
@@ -215,7 +378,9 @@ pub enum VariableID<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct Variable {
 	pub location: Location,
+	pub stack_loc: Option<usize>,
 	pub ty: VarType,
+	pub in_scope: bool,
 }
 
 #[derive(Clone, Copy, Debug)]

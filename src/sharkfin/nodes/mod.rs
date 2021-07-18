@@ -1,14 +1,12 @@
 mod node_impls;
 mod node_structs;
-pub use node_structs::*;
+pub(crate) use node_structs::ProgramRoot;
 
 use super::lexer::*;
 use super::vars::*;
 use super::CompileContext;
 use crate::bytecode::*;
 use std::fmt::Debug;
-
-type RootNode<'a> = CodeBlock<'a>;
 
 pub(super) trait ASTNode<'a>: Debug + Sized {
 	fn precompute(&self) -> Option<Word> {
@@ -21,6 +19,6 @@ pub(super) trait ASTNode<'a>: Debug + Sized {
 		context: &mut CompileContext<'a>,
 		start: usize,
 	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])>;
-	fn record_var_usage(&self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>>;
+	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>>;
 	fn generate_source(&self, context: &mut CompileContext<'a>);
 }

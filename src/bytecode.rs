@@ -11,6 +11,11 @@ pub(crate) struct Instruction {
 }
 
 impl Instruction {
+	pub(crate) fn args_as_const(&self) -> Word {
+		use std::convert::TryInto;
+		(u32::from_le_bytes(self.args[2..6].try_into().unwrap()) as Word) << (self.args[1] as Word)
+	}
+
 	pub(crate) fn from_raw(instruction: &[u8; 8]) -> Self {
 		use std::convert::TryInto;
 		use std::mem::transmute;
@@ -90,10 +95,11 @@ impl Default for Instruction {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumCount, EnumString, ToString)]
 #[repr(u8)]
 pub(crate) enum Condition {
 	Al = 0,
+	Nev,
 	Eq,
 	NEq,
 	Gr,
@@ -106,8 +112,41 @@ pub(crate) enum Condition {
 	ULsEq,
 }
 
+impl Condition {
+	pub fn implies(self, other: Condition) -> bool {
+		use Condition::*;
+		let possibilities: &[Condition] = match self {
+			Eq => &[UGrEq, ULsEq, GrEq, LsEq],
+			Gr => &[GrEq],
+			Ls => &[LsEq],
+			UGr => &[UGrEq],
+			ULs => &[ULsEq],
+			_ => &[],
+		};
+		self == other || other == Al || possibilities.contains(&other)
+	}
+
+	pub fn negate(self) -> Self {
+		use Condition::*;
+		match self {
+			Al => Nev,
+			Nev => Al,
+			Eq => NEq,
+			NEq => Eq,
+			Gr => LsEq,
+			Ls => GrEq,
+			GrEq => Ls,
+			LsEq => Gr,
+			UGr => ULsEq,
+			ULs => UGrEq,
+			UGrEq => ULs,
+			ULsEq => UGr,
+		}
+	}
+}
+
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, EnumCount, EnumString, ToString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumCount, EnumString, ToString)]
 #[repr(u8)]
 pub(crate) enum Mnemonic {
 	Nop = 0,
@@ -117,23 +156,19 @@ pub(crate) enum Mnemonic {
 	Inc,
 	//Increment value in registers[args[0]]
 	Const,
-	//Load args[2..5] as little endian u32, left shifted by args[1] into registers[args[0]]
+	//Load args[2..6] as little endian u32, left shifted by args[1] into registers[args[0]]
 	Load,
 	//registers[args[1]] = data[registers[args[0]]]
 	StkLd,
-	//registers[args[1]] = data[registers[args[0]] + base pointer]
+	//registers[args[0]] = data[args[2..6] as const + base pointer]
 	Store,
 	//data[registers[args[1]]] = registers[args[0]]
 	StkStr,
-	//data[registers[args[1]]+base pointer] = registers[args[0]]
+	//data[args[2..6] as const+base pointer] = registers[args[0]]
 	Pop,
 	//Pop off stack into registers[args[0]]
-	PopAll,
-	//Restore all registers in range args[0]..args[1] from stack
 	Push,
 	//Push registers[args[0]] onto stack
-	PushAll,
-	//Push all registers in range args[0]..args[1] from stack
 	Puts,
 	//Print string stored at data[register[args[0]]]
 	Or,
@@ -150,6 +185,11 @@ pub(crate) enum Mnemonic {
 	//Integer divide registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Mov,
 	//Move registers[args[0]] into registers[args[1]]
+	Cmp,
+	//Update condition register
+	RelJmp,
+	//Load args[2..6] as little endian u32, left shifted by args[1], negated if args[0] != 0,
+	//wrapping adds value to instruction pointer.
 	Hlt,
 	//Exit program with return value registers[args[0]] as i32
 }
