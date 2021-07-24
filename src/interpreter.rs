@@ -61,10 +61,12 @@ impl<'a> FinProgram<'a> {
 			..Default::default()
 		};
 
+		let mut breakpoint: Option<Word> = None;
 		while data.regs.ip < self.code.len() as Word {
 			let ip = data.regs.ip;
 			let instruction = self.code[ip as usize];
-			if debug {
+
+			if debug && breakpoint.filter(|&bp| bp != ip).is_none() {
 				print!(
 					"cond: {}\ninstruction: \n{}\ndata: \n{:?}\n",
 					if data.regs.cond_matches(instruction.condition) {
@@ -78,21 +80,58 @@ impl<'a> FinProgram<'a> {
 				if ip < self.code.len() as Word - 1 {
 					loop {
 						use std::io::Write;
-						print!(">");
+						print!("> ");
 						io::stdout().flush().unwrap();
-						let mut cmd = String::new();
-						io::stdin().read_line(&mut cmd).unwrap();
-						if cmd.starts_with("exit") {
-							throw_error("Early exit", ip as usize, instruction);
+						let mut raw_cmd = String::new();
+						io::stdin().read_line(&mut raw_cmd).unwrap();
+						let cmd = raw_cmd.trim();
+						if cmd == "exit" {
+							self.throw_error("Early exit", ip);
+						} else if cmd == "line" {
+							match &self.debug_info {
+								Some(debug) => {
+									let (line_no, line) = debug.line(ip);
+									println!("(line {}): | {}", line_no, line);
+								}
+								None => println!("No debug info."),
+							}
 						} else if let Some(num) = cmd.strip_prefix("skip:") {
 							match num.parse::<i64>() {
 								Ok(dist) => {
 									data.regs.ip =
 										data.regs.ip.wrapping_add(dist.wrapping_sub(1) as Word)
 								}
-								Err(err) => println!("Unable to parse command: `{:?}`", err),
+								Err(err) => println!("Unable to parse argument: `{:?}`", err),
 							}
-						} else if cmd.trim() == "" {
+						} else if let Some(num) = cmd.strip_prefix("setbp:") {
+							match num.parse::<Word>() {
+								Ok(bp) => {
+									breakpoint = Some(bp);
+								}
+								Err(err) => println!("Unable to parse argument: `{:?}`", err),
+							}
+						} else if cmd == "unsetbp" {
+							breakpoint = None;
+						} else if let Some(num) = cmd.strip_prefix("fword:") {
+							match num.parse::<u8>() {
+								Ok(reg) => {
+									println!(
+										"#{}: {}",
+										reg,
+										FWord::from_bits(data.regs.gp[reg as usize])
+									);
+								}
+								Err(err) => println!("Unable to parse argument: `{:?}`", err),
+							}
+						} else if let Some(num) = cmd.strip_prefix("word:") {
+							match num.parse::<u8>() {
+								Ok(reg) => {
+									println!("#{}: {}", reg, data.regs.gp[reg as usize]);
+								}
+								Err(err) => println!("Unable to parse argument: `{:?}`", err),
+							}
+						} else if cmd.is_empty() {
+							println!();
 							break;
 						} else {
 							println!("Unknown Command `{}`", cmd);
@@ -213,6 +252,7 @@ impl<'a> FinProgram<'a> {
 			let mut ip = 0;
 			while ip < self.code.len() {
 				let inst = self.code[ip];
+
 				if elim_inst(inst) {
 					modified_code = true;
 					self.code.remove(ip);
@@ -221,14 +261,9 @@ impl<'a> FinProgram<'a> {
 						let inst_moved = early >= ip;
 						let old_early = early + inst_moved as usize;
 						let old_dest = get_jmp_dest(early_inst, old_early);
-						if early_inst.mnemonic == Mnemonic::RelJmp
-							&& (old_early >= ip) != (old_dest >= ip as Word)
-						{
-							let new_dest = if inst_moved && old_dest != ip as Word {
-								old_dest - 1
-							} else {
-								old_dest
-							};
+						let dest_moved = old_dest > ip as Word;
+						if early_inst.mnemonic == Mnemonic::RelJmp && inst_moved != dest_moved {
+							let new_dest = if dest_moved { old_dest - 1 } else { old_dest };
 							abbreviations::branch(early as Word, new_dest, &mut self.code);
 						}
 					}
@@ -293,10 +328,6 @@ impl Data {
 					let addr = self.regs.bp + inst.args_as_const() as Word;
 					*self.write_addr(addr) = self.regs.read_gp(args[0]);
 				}
-				Push => self.stack.push(self.regs.read_gp(args[0])),
-				Pop => {
-					*self.regs.write_gp(args[0]) = self.stack.pop().expect("Empty stack");
-				}
 				Puts => {
 					unimplemented!()
 				}
@@ -328,6 +359,26 @@ impl Data {
 						return Err("Division by zero!");
 					}
 				}
+				FAdd => {
+					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = (a + b).to_bits();
+				}
+				FSub => {
+					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = (a - b).to_bits();
+				}
+				FMul => {
+					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = (a * b).to_bits();
+				}
+				FDiv => {
+					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);
+					if b != 0.0 {
+						*self.regs.write_gp(args[0]) = (a / b).to_bits();
+					} else {
+						return Err("Division by zero!");
+					}
+				}
 				Mov => {
 					*self.regs.write_gp(args[1]) = self.regs.read_gp(args[0]);
 				}
@@ -343,8 +394,16 @@ impl Data {
 						const_val
 					});
 				}
+				FToI => {
+					let [f] = self.regs.fmap_to_gps(&[args[0]]);
+					*self.regs.write_gp(args[0]) = f as Word;
+				}
+				IToF => {
+					let [i] = self.regs.map_to_gps(&[args[0]]);
+					*self.regs.write_gp(args[0]) = (i as FWord).to_bits();
+				}
 				Hlt => {
-					std::process::exit(self.regs.read_gp(args[0]) as i32);
+					//std::process::exit(self.regs.read_gp(args[0]) as i32);
 				}
 			}
 		}
@@ -366,13 +425,16 @@ impl Data {
 
 	fn write_addr(&mut self, address: Word) -> &mut Word {
 		//If the first bit is a 1, then the value written to is in program_data
-		let program_data_bit = address & (1 << (Word::BITS - 1));
+		const BIT_MASK: Word = 1 << (Word::BITS - 1);
+		let program_data_bit = address & BIT_MASK;
 
 		if program_data_bit != 0 {
 			assert!(address < self.program_data.len() as Word);
-			&mut self.program_data[(address & !program_data_bit) as usize]
+			&mut self.program_data[(address & !BIT_MASK) as usize]
 		} else {
-			assert!(address < self.stack.len() as Word);
+			if address >= self.stack.len() as Word {
+				self.stack.resize((address + 1) as usize, 0);
+			}
 			&mut self.stack[address as usize]
 		}
 	}
@@ -392,11 +454,22 @@ impl RegisterData {
 	const EQ_MASK: u8 = 1 << 2;
 	const UNSIGNED_GREATER_MASK: u8 = 1 << 3;
 	const UNSIGNED_LESS_MASK: u8 = 1 << 4;
+	const FLOAT_GREATER_MASK: u8 = 1 << 5;
+	const FLOAT_LESS_MASK: u8 = 1 << 6;
+	const FLOAT_EQ_MASK: u8 = 1 << 7;
 
 	fn map_to_gps<const N: usize>(&self, regs: &[u8; N]) -> [Word; N] {
 		let mut out = [0; N];
 		for (i, reg) in regs.iter().enumerate() {
 			out[i] = self.read_gp(*reg);
+		}
+		out
+	}
+
+	fn fmap_to_gps<const N: usize>(&self, regs: &[u8; N]) -> [FWord; N] {
+		let mut out = [0.; N];
+		for (i, reg) in regs.iter().enumerate() {
+			out[i] = FWord::from_bits(self.read_gp(*reg));
 		}
 		out
 	}
@@ -419,6 +492,15 @@ impl RegisterData {
 				_ => (),
 			}
 		}
+		use std::cmp::Ordering;
+		let a = FWord::from_bits(a);
+		let b = FWord::from_bits(b);
+		match a.partial_cmp(&b) {
+			Some(Less) => set_bit(Self::FLOAT_LESS_MASK),
+			Some(Greater) => set_bit(Self::FLOAT_GREATER_MASK),
+			Some(Ordering::Equal) => set_bit(Self::FLOAT_EQ_MASK),
+			_ => (),
+		}
 	}
 
 	fn cond_matches(&self, cond: Condition) -> bool {
@@ -427,6 +509,9 @@ impl RegisterData {
 		let equal = self.cmp & Self::EQ_MASK;
 		let unsigned_greater = self.cmp & Self::UNSIGNED_GREATER_MASK;
 		let unsigned_less = self.cmp & Self::UNSIGNED_LESS_MASK;
+		let float_eq = self.cmp & Self::FLOAT_EQ_MASK;
+		let float_greater = self.cmp & Self::FLOAT_GREATER_MASK;
+		let float_less = self.cmp & Self::FLOAT_LESS_MASK;
 
 		use Condition::*;
 		match cond {
@@ -434,14 +519,20 @@ impl RegisterData {
 			Nev => false,
 			Eq => equal != 0,
 			NEq => equal == 0,
-			Gr => greater != 0,
 			Ls => less != 0,
 			GrEq => less == 0,
+			Gr => greater != 0,
 			LsEq => greater == 0,
-			UGr => unsigned_greater != 0,
 			ULs => unsigned_less != 0,
 			UGrEq => unsigned_less == 0,
+			UGr => unsigned_greater != 0,
 			ULsEq => unsigned_greater == 0,
+			FEq => float_eq == 0,
+			FNEq => float_eq != 0,
+			FLs => float_less == 0,
+			FGrEq => float_less != 0,
+			FGr => float_greater == 0,
+			FLsEq => float_greater != 0,
 		}
 	}
 

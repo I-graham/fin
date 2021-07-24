@@ -1,5 +1,5 @@
-mod int_exprs;
 mod log_exprs;
+mod math_exprs;
 
 use super::node_structs::*;
 use super::*;
@@ -29,7 +29,7 @@ impl<'a> ASTNode<'a> for ProgramRoot<'a> {
 	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])> {
 		let (prog_end, program) = RootNode::construct(context, start)?;
 		let _ = tokens_match_kinds(&context.tokens[prog_end..], &[TokenKind::Eof])?;
-		Ok((prog_end, Self(program)))
+		Ok((prog_end + 1, Self(program)))
 	}
 
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
@@ -62,13 +62,20 @@ impl<'a> ASTNode<'a> for CodeBlock<'a> {
 			recorder: None,
 		};
 		let mut end = start + 1;
-		while let Ok((node_end, next)) = Statement::construct(context, end) {
-			end = node_end;
-			ret.code.push(next);
+		loop {
+			match Statement::construct(context, end) {
+				Ok((node_end, next)) => {
+					end = node_end;
+					ret.code.push(next);
+				}
+				Err(_) if tokens_match_kinds(&context.tokens[end..], &[RCurly]).is_ok() => {
+					break Ok((end + 1, ret));
+				}
+				Err(err) => break Err(err),
+			}
 		}
-		let _ = tokens_match_kinds(&context.tokens[end..], &[RCurly])?;
-		Ok((end + 1, ret))
 	}
+
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
 		context.scope.open_scope();
 		self.code.iter_mut().for_each(|statement| {
@@ -82,6 +89,11 @@ impl<'a> ASTNode<'a> for CodeBlock<'a> {
 		for statement in &self.code {
 			statement.generate_source(context);
 		}
+		let vars = self.recorder.as_ref().unwrap();
+		context.scope.kill_vars(
+			vars.iter()
+				.filter_map(|(v, b)| if *b { Some(v) } else { None }),
+		);
 	}
 }
 
@@ -140,7 +152,6 @@ impl<'a> ASTNode<'a> for Statement<'a> {
 				}
 			}
 		};
-
 		Err(err)
 	}
 
@@ -186,6 +197,7 @@ impl<'a> ASTNode<'a> for WhileLoop<'a> {
 			},
 		))
 	}
+
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
 		context.scope.open_scope();
 		self.cond.record_var_usage(context);
@@ -216,6 +228,7 @@ impl<'a> ASTNode<'a> for WhileLoop<'a> {
 						.scope
 						.place_from_iter(vars.keys(), &mut context.program.code);
 				}
+
 				context.scope.save_state();
 				let enter_inst = if pre.is_none() {
 					let len = context.code().len() as Word;
@@ -231,7 +244,15 @@ impl<'a> ASTNode<'a> for WhileLoop<'a> {
 					None
 				};
 				let start_inst = context.code().len() as Word;
+				context.scope.kill_vars(
+					vars.iter()
+						.filter_map(|(v, b)| if *b { Some(v) } else { None }),
+				);
 				self.code.generate_source(context);
+				context.scope.kill_vars(
+					vars.iter()
+						.filter_map(|(v, b)| if *b { Some(v) } else { None }),
+				);
 				context.scope.restore_state(&mut context.program.code);
 
 				if let Some(inst_id) = enter_inst {
@@ -312,33 +333,38 @@ impl<'a> ASTNode<'a> for IfStatement<'a> {
 			);
 		};
 		let mut exits = vec![];
+		let mut const_cond_found = false;
 		for (cond, code) in &self.cond_code {
-			match cond.precompute() {
-				None => {
-					cond.generate_source(context);
-					let jmp_to_next_inst = context.code().len() as Word - 1;
-					context.scope.save_state();
-					code.generate_source(context);
-					create_exit(context, &mut exits);
-					let out = &mut context.program.code;
-					context.scope.restore_state(out);
-					abbreviations::branch(
-						jmp_to_next_inst,
-						context.code().len() as Word,
-						context.code(),
-					)
+			if !const_cond_found {
+				match cond.precompute() {
+					None => {
+						cond.generate_source(context);
+						let jmp_to_next_inst = context.code().len() as Word - 1;
+						context.scope.save_state();
+						code.generate_source(context);
+						create_exit(context, &mut exits);
+						context.scope.restore_state(&mut context.program.code);
+						abbreviations::branch(
+							jmp_to_next_inst,
+							context.code().len() as Word,
+							context.code(),
+						)
+					}
+					Some(0) => (),
+					Some(1) => {
+						code.generate_source(context);
+						create_exit(context, &mut exits);
+						const_cond_found = true;
+						break;
+					}
+					_ => unreachable!(),
 				}
-				Some(0) => (),
-				Some(1) => {
-					code.generate_source(context);
-					create_exit(context, &mut exits);
-					break;
-				}
-				_ => unreachable!(),
 			}
 		}
 		if let Some(else_statement) = &self.else_code {
-			else_statement.generate_source(context);
+			if !const_cond_found {
+				else_statement.generate_source(context);
+			}
 		}
 		for exit in exits {
 			abbreviations::branch(exit, context.code().len() as Word, context.code());
@@ -355,30 +381,25 @@ impl<'a> ASTNode<'a> for LetVar<'a> {
 		static FORMAT: [TokenKind; 4] = [Let, Type, Ident, Assign];
 		let _ = tokens_match_kinds(&context.tokens[start..], &FORMAT)?;
 		let (end, mut_var) = MutateVar::construct(context, start + 2)?;
-		Ok((end, Self { mut_var }))
-	}
 
-	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
-		let sum_var = self.mut_var.val.record_var_usage(context).unwrap();
-		let access = &self.mut_var.access;
+		let sum_var = mut_var.val.output_var().unwrap();
+		let access = &mut_var.access;
 		let var_name = access.var.text;
-		if context.scope.get_var(var_name).is_some() {
+		if context.scope.var_in_scope(VariableID::Named(var_name)) {
 			context.error.err_at_token(
 				"Variable name already in use!",
 				"Use a different variable name.",
 				access.var,
 			);
 		}
-		let opvar = match sum_var {
-			VariableID::Named(_) => {
-				let [var] = context
-					.scope
-					.allocate_var(&[(Some(var_name), VarType::Int)]);
-				var
-			}
-			VariableID::Unnamed(_) => context.scope.create_synonym(Some(var_name), sum_var),
-		};
-		self.mut_var.access.record_var_usage(context);
+		context.scope.create_synonym(Some(var_name), sum_var);
+
+		Ok((end, Self { mut_var }))
+	}
+
+	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
+		let sum_var = self.mut_var.val.record_var_usage(context).unwrap();
+		let opvar = self.mut_var.access.record_var_usage(context).unwrap();
 		context.scope.record_usage(&[opvar, sum_var]);
 		None
 	}
@@ -386,15 +407,13 @@ impl<'a> ASTNode<'a> for LetVar<'a> {
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
 		self.mut_var.generate_source(context);
 		let access = &self.mut_var.access;
-		let var_id = VariableID::Named(access.var.text);
-		println!(
-			"Var `{}` stored in reg #{:?} at inst #{}.",
-			access.var.text,
-			&context
-				.scope
-				.place_vars(&[var_id], &mut context.program.code),
-			context.program.code.len() - 1
-		);
+		let text = access.var.text;
+		let var_id = VariableID::Named(text);
+		let [reg] = context
+			.scope
+			.place_vars(&[(var_id, false)], &mut context.program.code);
+		let pos = context.code().len() - 1;
+		println!("Var `{}` stored in reg #{:?} at inst #{}.", text, reg, pos);
 		context.update_debug_info(Some(access.var));
 	}
 }
@@ -426,9 +445,10 @@ impl<'a> ASTNode<'a> for MutateVar<'a> {
 		let val_op = self.val.output_var().unwrap();
 		self.access.generate_source(context);
 		let var_op = self.access.output_var().unwrap();
-		let [var, val] = context
-			.scope
-			.place_vars(&[var_op, val_op], &mut context.program.code);
+		let [val, var] = context.scope.place_vars(
+			&[(val_op, false), (var_op, false)],
+			&mut context.program.code,
+		);
 		if val != var {
 			context.emit(
 				&[Instruction {
@@ -457,15 +477,16 @@ impl<'a> ASTNode<'a> for AccessVar<'a> {
 	}
 
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
-		if let Some(var) = context.scope.get_var(self.var.text) {
-			context.scope.record_usage(&[var]);
-			Some(var)
+		let id = VariableID::Named(self.var.text);
+		if context.scope.var_in_scope(id) {
+			context.scope.record_usage(&[id]);
+			Some(id)
 		} else {
 			context.error.err_at_token(
 				"Variable undefined or out of scope.",
 				"Define this variable before use.",
 				self.var,
-			);
+			)
 		}
 	}
 
@@ -473,65 +494,19 @@ impl<'a> ASTNode<'a> for AccessVar<'a> {
 		Some(VariableID::Named(self.var.text))
 	}
 
+	fn output_type(&self, context: &CompileContext) -> Option<VarType> {
+		let id = VariableID::Named(self.var.text);
+		if context.scope.var_in_scope(id) {
+			self.output_var()
+				.map(|id| context.scope.var_type(id).unwrap())
+		} else {
+			context.error.err_at_token(
+				"Variable undefined or out of scope.",
+				"Define this variable before use.",
+				self.var,
+			)
+		}
+	}
+
 	fn generate_source(&self, _context: &mut CompileContext<'a>) {}
-}
-
-impl<'a> ASTNode<'a> for LiteralInt<'a> {
-	fn construct(
-		context: &mut CompileContext<'a>,
-		start: usize,
-	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])> {
-		use TokenKind::*;
-		if context.tokens.len() <= start {
-			return Err((*context.tokens.last().unwrap(), &[Integer]));
-		}
-		let minus_count = context.tokens[start..]
-			.iter()
-			.take_while(|token| token.kind == Minus)
-			.count();
-		let negate = minus_count % 2 == 1;
-		let rest = &context.tokens[start + minus_count..];
-		let _ = tokens_match_kinds(rest, &[Integer])?;
-		let int_token = rest[0];
-		let literal: Word = int_token.text.parse().unwrap();
-		let value = if negate {
-			literal.wrapping_neg()
-		} else {
-			literal
-		};
-		Ok((start + minus_count + 1, Self::from_const(value, context)))
-	}
-
-	fn precompute(&self) -> Option<Word> {
-		Some(self.value)
-	}
-
-	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
-		let op = self.output.0;
-		match self.output.1 {
-			Some(op2) => context.scope.record_usage(&[op, op2]),
-			None => context.scope.record_usage(&[op]),
-		}
-		Some(op)
-	}
-
-	fn output_var(&self) -> Option<VariableID<'a>> {
-		Some(self.output.0)
-	}
-
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
-		if abbreviations::fits_in_const_inst(self.value) {
-			let [start] = context
-				.scope
-				.place_vars(&[self.output.0], &mut context.program.code);
-			abbreviations::load_const(self.value, start, None, &mut context.program.code);
-		} else {
-			let scratch_var = self.output.1.unwrap();
-			let [start, scratch] = context
-				.scope
-				.place_vars(&[self.output.0, scratch_var], &mut context.program.code);
-			abbreviations::load_const(self.value, start, Some(scratch), &mut context.program.code);
-		}
-		context.update_debug_info(None);
-	}
 }

@@ -1,7 +1,7 @@
-mod int_exprs;
 mod log_exprs;
-pub(super) use int_exprs::*;
+mod math_exprs;
 pub(super) use log_exprs::*;
+pub(super) use math_exprs::*;
 
 use super::CompileContext;
 use crate::bytecode::*;

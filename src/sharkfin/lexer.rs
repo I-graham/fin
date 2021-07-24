@@ -1,4 +1,4 @@
-use crate::bytecode::Word;
+use crate::bytecode::{FWord, Word};
 
 pub(crate) struct Lexer<'a> {
 	pub(super) source: &'a str,
@@ -34,10 +34,26 @@ impl<'a> Lexer<'a> {
 			match next {
 				c if !c.is_ascii() => Err("Non-ASCII character encountered!".into()),
 				d if d.is_digit(10) => {
-					let text = self.advance_until_char(|d| !d.is_digit(10));
-					match Word::from_str_radix(text, 10) {
-						Ok(_) => Ok(self.create_token(TokenKind::Integer, text)),
-						Err(err) => Err(format!("{:?}!", err)),
+					let mut decimal_encountered = false;
+					let text = self.advance_until_char(|c| {
+						if !decimal_encountered && c == '.' {
+							decimal_encountered = true;
+							false
+						} else {
+							!c.is_digit(10)
+						}
+					});
+					if decimal_encountered {
+						use std::str::FromStr;
+						match FWord::from_str(text) {
+							Ok(_) => Ok(self.create_token(TokenKind::Float, text)),
+							Err(err) => Err(format!("{:?}", err)),
+						}
+					} else {
+						match Word::from_str_radix(text, 10) {
+							Ok(_) => Ok(self.create_token(TokenKind::Integer, text)),
+							Err(err) => Err(format!("{:?}", err)),
+						}
 					}
 				}
 				c if c.is_alphabetic() && c.is_lowercase() => {
@@ -52,7 +68,7 @@ impl<'a> Lexer<'a> {
 					let text = self.advance_until_char(|c| !c.is_whitespace());
 					Ok(self.create_token(TokenKind::Whitespace, text))
 				}
-				_ => Err("Unknown Character".into()),
+				_ => Err("Unknown character".into()),
 			}
 		} else {
 			Ok(self.create_token(TokenKind::Eof, &self.source[0..0]))
@@ -103,6 +119,7 @@ pub(crate) enum TokenKind {
 	Ident,
 	Type,
 	Integer,
+	Float,
 	Whitespace,
 	Eof,
 	Assign,
@@ -138,6 +155,7 @@ impl TokenKind {
 			Ident => "{identifier}",
 			Type => "{Type}",
 			Integer => "{integer}",
+			Float => "{float}",
 			Whitespace => "{whitespace}",
 			Eof => "{end of file}",
 			Assign => "=",

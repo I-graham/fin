@@ -2,7 +2,8 @@
 
 use crate::bytecode::*;
 
-pub(super) const fn num_as_const_bytes(value: Word) -> [u8; 5] {
+pub(super) fn num_as_const_bytes(value: Word) -> [u8; 5] {
+	debug_assert!(fits_in_const_inst(value));
 	let shift = if value != 0 {
 		value.trailing_zeros() as u8
 	} else {
@@ -26,18 +27,18 @@ pub(super) fn load_const(value: Word, reg1: u8, reg2: Option<u8>, out: &mut Vec<
 			..Default::default()
 		}]);
 	} else if let Some(reg2) = reg2 {
-		let [_, a, b, c, d] = num_as_const_bytes(value & u32::MAX as Word);
-		let [_, a2, b2, c2, d2] = num_as_const_bytes(value);
+		let [shift1, a1, b1, c1, d1] = num_as_const_bytes(value & u32::MAX as Word);
+		let [shift2, a2, b2, c2, d2] = num_as_const_bytes(value & !(u32::MAX as Word));
 		out.extend(&[
 			Instruction {
 				condition: Condition::Al,
 				mnemonic: Mnemonic::Const,
-				args: [reg1, 0, a, b, c, d],
+				args: [reg1, shift1, a1, b1, c1, d1],
 			},
 			Instruction {
 				condition: Condition::Al,
 				mnemonic: Mnemonic::Const,
-				args: [reg2, 32, a2, b2, c2, d2],
+				args: [reg2, shift2, a2, b2, c2, d2],
 			},
 			Instruction {
 				condition: Condition::Al,

@@ -62,13 +62,15 @@ impl<'a> CompileContext<'a> {
 	}
 
 	pub(super) fn update_debug_info(&mut self, associated_token: Option<Token<'a>>) {
-		let line_no = associated_token.map(|token| token.line).unwrap_or(0) as u64;
-		let code_len = self.program.code.len() as u64;
-		self.program
-			.debug_info
-			.as_mut()
-			.unwrap()
-			.emitted_code(code_len, line_no);
+		if let Some(token) = associated_token {
+			let line_no = token.line as Word;
+			let code_len = self.program.code.len() as Word;
+			self.program
+				.debug_info
+				.as_mut()
+				.unwrap()
+				.emitted_code(code_len, line_no);
+		}
 	}
 }
 

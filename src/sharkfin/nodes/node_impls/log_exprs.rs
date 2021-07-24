@@ -14,6 +14,7 @@ impl<'a> ASTNode<'a> for OrExpr<'a> {
 			})
 			.unwrap()
 	}
+
 	fn construct(
 		context: &mut CompileContext<'a>,
 		start: usize,
@@ -27,12 +28,14 @@ impl<'a> ASTNode<'a> for OrExpr<'a> {
 		}
 		Ok((node_end, ret))
 	}
+
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
 		for and in &mut self.ands {
 			and.record_var_usage(context);
 		}
 		None
 	}
+
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
 		let mut early_exits = vec![];
 		for and in &self.ands {
@@ -63,7 +66,6 @@ impl<'a> ASTNode<'a> for OrExpr<'a> {
 		abbreviations::branch(true_jmp - 1, false_jmp, context.code());
 		abbreviations::branch(true_jmp, context.code().len() as Word, context.code());
 
-
 		for early_exit in early_exits.iter().map(|&u| u as Word) {
 			abbreviations::branch(early_exit, true_jmp, context.code());
 		}
@@ -82,6 +84,7 @@ impl<'a> ASTNode<'a> for AndExpr<'a> {
 			})
 			.unwrap()
 	}
+
 	fn construct(
 		context: &mut CompileContext<'a>,
 		start: usize,
@@ -95,12 +98,14 @@ impl<'a> ASTNode<'a> for AndExpr<'a> {
 		}
 		Ok((node_end, ret))
 	}
+
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
 		for boolean in &mut self.bools {
 			boolean.record_var_usage(context);
 		}
 		None
 	}
+
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
 		let mut early_exits = vec![];
 		for boolean in &self.bools {
@@ -122,11 +127,19 @@ impl<'a> ASTNode<'a> for Boolean<'a> {
 		let (end, comparison) = Comparison::construct(context, start)?;
 		Ok((end, Self::Comparison(comparison)))
 	}
+
+	fn precompute(&self) -> Option<Word> {
+		match self {
+			Self::Comparison(comp) => comp.precompute(),
+		}
+	}
+
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
 		match self {
 			Self::Comparison(comp) => comp.record_var_usage(context),
 		}
 	}
+
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
 		match self {
 			Self::Comparison(comp) => {
@@ -157,7 +170,7 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 		start: usize,
 	) -> Result<(usize, Self), (Token<'a>, &'static [TokenKind])> {
 		use TokenKind::*;
-		static COMP_OPS: [TokenKind; 5] = [Less, Greater, LessEq, GreaterEq, Eq];
+		static COMP_OPS: [TokenKind; 6] = [Less, Greater, LessEq, GreaterEq, Eq, NEq];
 		let err_ret = Err((*context.tokens.last().unwrap(), &COMP_OPS[..]));
 
 		let (arg_a_end, arg_a) = Expr::construct(context, start)?;
@@ -169,21 +182,26 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 			return err_ret;
 		}
 		let (arg_b_end, arg_b) = Expr::construct(context, arg_a_end + 1)?;
+
+		let ty = arg_a.output_type(context).unwrap();
+		let ty2 = arg_b.output_type(context).unwrap();
+
+		if ty != ty2 {
+			context.error.err_at_token(
+				"Comparison of distinct types!",
+				"Cast arguments to matching types",
+				op,
+			);
+		}
+
 		Ok((
 			arg_b_end,
 			Self {
 				args: (arg_a, arg_b),
+				ty,
 				op,
 			},
 		))
-	}
-
-	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
-		let a = self.args.0.record_var_usage(context).unwrap();
-		let b = self.args.1.record_var_usage(context).unwrap();
-		let [opvar] = context.scope.allocate_var(&[(None, VarType::Int)]);
-		context.scope.record_usage(&[a, b, opvar]);
-		Some(opvar)
 	}
 
 	fn precompute(&self) -> Option<Word> {
@@ -197,8 +215,16 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 			LessEq => a <= b,
 			GreaterEq => a >= b,
 			Eq => a == b,
+			NEq => a != b,
 			_ => unreachable!(),
 		} as Word)
+	}
+
+	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>> {
+		let a = self.args.0.record_var_usage(context).unwrap();
+		let b = self.args.1.record_var_usage(context).unwrap();
+		context.scope.record_usage(&[a, b]);
+		None
 	}
 
 	fn generate_source(&self, context: &mut CompileContext<'a>) {
@@ -206,7 +232,9 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 		self.args.1.generate_source(context);
 		let a = self.args.0.output_var().unwrap();
 		let b = self.args.1.output_var().unwrap();
-		let [a_opreg, b_opreg] = context.scope.place_vars(&[a, b], &mut context.program.code);
+		let [a_opreg, b_opreg] = context
+			.scope
+			.place_vars(&[(a, false), (b, false)], &mut context.program.code);
 		context.emit(
 			&[Instruction {
 				mnemonic: Mnemonic::Cmp,

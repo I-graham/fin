@@ -20,6 +20,7 @@ pub(crate) enum Boolean<'a> {
 #[derive(Debug)]
 pub(crate) struct Comparison<'a> {
 	pub args: (Expr<'a>, Expr<'a>),
+	pub ty: VarType,
 	pub op: Token<'a>,
 }
 
@@ -33,6 +34,7 @@ impl<'a> Comparison<'a> {
 			LessEq => LsEq,
 			GreaterEq => GrEq,
 			TokenKind::Eq => Condition::Eq,
+			TokenKind::NEq => Condition::NEq,
 			_ => unreachable!(),
 		}
 	}

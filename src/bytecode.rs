@@ -2,6 +2,7 @@ use strum::EnumCount;
 use strum_macros::{EnumCount, EnumString, ToString};
 
 pub type Word = u64;
+pub type FWord = f64;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Instruction {
@@ -38,7 +39,7 @@ impl Instruction {
 
 	pub(crate) fn as_string(&self) -> String {
 		format!(
-			"{:8} {:8} [{:3}, {:3}, {:3}, {:3}, {:3}, {:3}]",
+			"{:6} {:8} [{:3}, {:3}, {:3}, {:3}, {:3}, {:3}]",
 			self.condition.to_string(),
 			self.mnemonic.to_string(),
 			self.args[0],
@@ -110,17 +111,25 @@ pub(crate) enum Condition {
 	ULs,
 	UGrEq,
 	ULsEq,
+	FEq,
+	FNEq,
+	FGr,
+	FLs,
+	FGrEq,
+	FLsEq,
 }
 
 impl Condition {
 	pub fn implies(self, other: Condition) -> bool {
 		use Condition::*;
 		let possibilities: &[Condition] = match self {
-			Eq => &[UGrEq, ULsEq, GrEq, LsEq],
+			Eq => &[UGrEq, ULsEq, GrEq, LsEq, FEq, FGrEq, FLsEq],
 			Gr => &[GrEq],
 			Ls => &[LsEq],
 			UGr => &[UGrEq],
 			ULs => &[ULsEq],
+			FGr => &[FGrEq],
+			FLs => &[FLsEq],
 			_ => &[],
 		};
 		self == other || other == Al || possibilities.contains(&other)
@@ -128,19 +137,22 @@ impl Condition {
 
 	pub fn negate(self) -> Self {
 		use Condition::*;
-		match self {
-			Al => Nev,
-			Nev => Al,
-			Eq => NEq,
-			NEq => Eq,
-			Gr => LsEq,
-			Ls => GrEq,
-			GrEq => Ls,
-			LsEq => Gr,
-			UGr => ULsEq,
-			ULs => UGrEq,
-			UGrEq => ULs,
-			ULsEq => UGr,
+		//Pairs of conditions & their negations. Even indices are followed by their negations,
+		//odd indices are preceded by their negations.
+		const PAIRS: &[Condition; Condition::COUNT] = &[
+			Al, Nev, Eq, NEq, Gr, LsEq, Ls, GrEq, UGr, ULsEq, ULs, UGrEq, FEq, FNEq, FGrEq, FLsEq,
+			FGr, FLs,
+		];
+
+		let index = PAIRS
+			.iter()
+			.enumerate()
+			.find_map(|(i, &cond)| Some(i).filter(|_| cond == self))
+			.unwrap();
+		if index % 2 == 0 {
+			PAIRS[index + 1]
+		} else {
+			PAIRS[index - 1]
 		}
 	}
 }
@@ -159,16 +171,12 @@ pub(crate) enum Mnemonic {
 	//Load args[2..6] as little endian u32, left shifted by args[1] into registers[args[0]]
 	Load,
 	//registers[args[1]] = data[registers[args[0]]]
-	StkLd,
-	//registers[args[0]] = data[args[2..6] as const + base pointer]
 	Store,
 	//data[registers[args[1]]] = registers[args[0]]
+	StkLd,
+	//registers[args[0]] = data[args[2..6] as const + base pointer]
 	StkStr,
-	//data[args[2..6] as const+base pointer] = registers[args[0]]
-	Pop,
-	//Pop off stack into registers[args[0]]
-	Push,
-	//Push registers[args[0]] onto stack
+	//data[args[2..6] as const + base pointer] = registers[args[0]]
 	Puts,
 	//Print string stored at data[register[args[0]]]
 	Or,
@@ -183,6 +191,14 @@ pub(crate) enum Mnemonic {
 	//Integer multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Div,
 	//Integer divide registers[args[1]] by registers[args[2]] into registers[args[0]]
+	FAdd,
+	//Float add registers[args[1]] and registers[args[2]] into registers[args[0]]
+	FSub,
+	//Float subtract registers[args[2]] from registers[args[1]] into registers[args[0]]
+	FMul,
+	//multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
+	FDiv,
+	//divide registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Mov,
 	//Move registers[args[0]] into registers[args[1]]
 	Cmp,
@@ -190,6 +206,10 @@ pub(crate) enum Mnemonic {
 	RelJmp,
 	//Load args[2..6] as little endian u32, left shifted by args[1], negated if args[0] != 0,
 	//wrapping adds value to instruction pointer.
+	FToI,
+	//Convert float value in args[1] to int, stores output in args[0],
+	IToF,
+	//Convert int value in args[1] to float, stores output in args[0],
 	Hlt,
 	//Exit program with return value registers[args[0]] as i32
 }
