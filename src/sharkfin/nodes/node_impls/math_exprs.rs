@@ -204,69 +204,83 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 			.factors
 			.iter()
 			.any(|(factor, _)| factor.output_type(context).unwrap() == VarType::Float);
-		let mut pre: Word = if is_float_expr { 1f64.to_bits() } else { 1u64 };
+
+		let pre_nop = if is_float_expr { 1f64.to_bits() } else { 1u64 };
+		let mut pre: Word = pre_nop;
 		let mut i = 0;
 		while i < ret.factors.len() {
 			let factor = &ret.factors[i];
 			let token = factor.1;
 			let fty = factor.0.output_type(&context).unwrap();
-			match factor.0.precompute() {
-				Some(val) => {
-					let removed = ret.factors.remove(i);
-					let to_fw = FWord::from_bits;
+			if let Some(val) = factor.0.precompute() {
+				let to_fw = FWord::from_bits;
 
-					match token {
-						Some(Token { kind: Div, .. }) => {
-							if val == 0 {
-								context.error.err_at_token(
-									"Unconditional division by zero.",
-									"",
-									token.unwrap(),
-								);
-							}
-							if is_float_expr {
-								let arg = if fty != VarType::Float {
-									val as FWord
-								} else {
-									to_fw(val)
-								};
-								pre = (to_fw(pre) / arg).to_bits();
-							} else if pre as i64 % val as i64 == 0 {
-								pre = (pre as i64 / val as i64) as Word;
-							} else {
-								ret.factors.push(removed);
-								i += 1;
-							}
+				match token {
+					Some(Token { kind: Div, .. }) => {
+						if val == 0 {
+							context.error.err_at_token(
+								"Unconditional division by zero.",
+								"",
+								token.unwrap(),
+							);
 						}
-						_ => {
-							if is_float_expr {
-								let arg = if fty != VarType::Float {
-									val as FWord
-								} else {
-									to_fw(val)
-								};
-								pre = (to_fw(pre) * arg).to_bits();
+						if is_float_expr {
+							let arg = if fty != VarType::Float {
+								val as FWord
 							} else {
-								pre = pre.wrapping_mul(val)
+								to_fw(val)
+							};
+							pre = (to_fw(pre) / arg).to_bits();
+						} else if pre as i64 % val as i64 == 0 {
+							pre = (pre as i64 / val as i64) as Word;
+						} else {
+							if pre != pre_nop {
+								let factor = if is_float_expr {
+									let lit =
+										LiteralFloat::from_const(FWord::from_bits(pre), context);
+									Factor::LiteralFloat(lit)
+								} else {
+									let lit = LiteralInt::from_const(pre, context);
+									Factor::LiteralInt(lit)
+								};
+								ret.factors.insert(i, (factor, None))
 							}
+							pre = pre_nop;
+							i += 1;
+							continue;
+						}
+					}
+					_ => {
+						if is_float_expr {
+							let arg = if fty != VarType::Float {
+								val as FWord
+							} else {
+								to_fw(val)
+							};
+							pre = (to_fw(pre) * arg).to_bits();
+						} else {
+							pre = pre.wrapping_mul(val)
 						}
 					}
 				}
-				None => i += 1,
+				ret.factors.remove(i);
+			} else {
+				if pre != pre_nop {
+					let factor = if is_float_expr {
+						let lit = LiteralFloat::from_const(FWord::from_bits(pre), context);
+						Factor::LiteralFloat(lit)
+					} else {
+						let lit = LiteralInt::from_const(pre, context);
+						Factor::LiteralInt(lit)
+					};
+					ret.factors.insert(i, (factor, None))
+				}
+				pre = pre_nop;
+				i += 1;
 			}
 		}
 
-		let is_nop = if is_float_expr {
-			use std::cmp::Ordering;
-			FWord::from_bits(pre).partial_cmp(&1.0) == Some(Ordering::Equal)
-		} else {
-			pre == 1
-		};
-
-		if !is_nop
-			|| ret.factors.is_empty()
-			|| ret.factors[0].1.filter(|token| token.kind == Div).is_some()
-		{
+		if pre != pre_nop || ret.factors.is_empty() {
 			let factor = if is_float_expr {
 				let lit = LiteralFloat::from_const(FWord::from_bits(pre), context);
 				Factor::LiteralFloat(lit)
@@ -274,7 +288,7 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 				let lit = LiteralInt::from_const(pre, context);
 				Factor::LiteralInt(lit)
 			};
-			ret.factors.insert(0, (factor, None));
+			ret.factors.push((factor, None))
 		}
 
 		let ty = if is_float_expr {
