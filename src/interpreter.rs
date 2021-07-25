@@ -130,6 +130,13 @@ impl<'a> FinProgram<'a> {
 								}
 								Err(err) => println!("Unable to parse argument: `{:?}`", err),
 							}
+						} else if let Some(num) = cmd.strip_prefix("iword:") {
+							match num.parse::<u8>() {
+								Ok(reg) => {
+									println!("#{}: {}", reg, data.regs.gp[reg as usize] as i64);
+								}
+								Err(err) => println!("Unable to parse argument: `{:?}`", err),
+							}
 						} else if cmd.is_empty() {
 							println!();
 							break;
@@ -347,6 +354,10 @@ impl Data {
 					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
 					*self.regs.write_gp(args[0]) = a.wrapping_sub(b);
 				}
+				Mod => {
+					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = a % b;
+				}
 				Mul => {
 					let [a, b] = self.regs.map_to_gps(&[args[1], args[2]]);
 					*self.regs.write_gp(args[0]) = a.wrapping_mul(b);
@@ -366,6 +377,10 @@ impl Data {
 				FSub => {
 					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);
 					*self.regs.write_gp(args[0]) = (a - b).to_bits();
+				}
+				FMod => {
+					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);
+					*self.regs.write_gp(args[0]) = (a % b).to_bits();
 				}
 				FMul => {
 					let [a, b] = self.regs.fmap_to_gps(&[args[1], args[2]]);

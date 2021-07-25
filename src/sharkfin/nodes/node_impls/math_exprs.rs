@@ -191,9 +191,17 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 		while context.tokens.len() > node_end + 1 {
 			let token = context.tokens[node_end];
 			match token.kind {
-				Mul | Div => {
+				Mul | Div | Mod => {
 					let (node2_end, term2) = Factor::construct(context, node_end + 1)?;
-					ret.factors.push((term2, Some(token)));
+					match term2 {
+						Factor::Parenthesized(mut sum) if sum.addends.len() == 1 => {
+							let mut factors = sum.addends.remove(0).0.factors;
+							std::mem::swap(&mut factors, &mut ret.factors);
+							ret.factors.extend(factors);
+						}
+						_ => ret.factors.push((term2, Some(token))),
+					}
+
 					node_end = node2_end;
 				}
 				_ => break,
@@ -243,7 +251,44 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 									let lit = LiteralInt::from_const(pre, context);
 									Factor::LiteralInt(lit)
 								};
-								ret.factors.insert(i, (factor, None))
+								ret.factors.insert(i, (factor, None));
+							}
+							pre = pre_nop;
+							i += 1;
+							continue;
+						}
+					}
+					Some(Token { kind: Mod, .. }) => {
+						if val == 0 {
+							context.error.err_at_token(
+								"Unconditional Modulo by zero.",
+								"",
+								token.unwrap(),
+							);
+						}
+						if is_float_expr {
+							let arg = if fty != VarType::Float {
+								val as FWord
+							} else {
+								to_fw(val)
+							};
+							pre = (to_fw(pre) % arg).to_bits();
+						} else if pre as i64 % val as i64 == 0 {
+							pre = (pre as i64 % val as i64) as Word;
+							ret.factors.drain(..=i);
+							i = 0;
+							continue;
+						} else {
+							if pre != pre_nop {
+								let factor = if is_float_expr {
+									let lit =
+										LiteralFloat::from_const(FWord::from_bits(pre), context);
+									Factor::LiteralFloat(lit)
+								} else {
+									let lit = LiteralInt::from_const(pre, context);
+									Factor::LiteralInt(lit)
+								};
+								ret.factors.insert(i, (factor, None));
 							}
 							pre = pre_nop;
 							i += 1;
@@ -259,23 +304,18 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 							};
 							pre = (to_fw(pre) * arg).to_bits();
 						} else {
-							pre = pre.wrapping_mul(val)
+							pre = pre.wrapping_mul(val);
+
+							if pre == 0 {
+								ret.factors.drain(..=i);
+								i = 0;
+								continue;
+							}
 						}
 					}
 				}
 				ret.factors.remove(i);
 			} else {
-				if pre != pre_nop {
-					let factor = if is_float_expr {
-						let lit = LiteralFloat::from_const(FWord::from_bits(pre), context);
-						Factor::LiteralFloat(lit)
-					} else {
-						let lit = LiteralInt::from_const(pre, context);
-						Factor::LiteralInt(lit)
-					};
-					ret.factors.insert(i, (factor, None))
-				}
-				pre = pre_nop;
 				i += 1;
 			}
 		}
@@ -407,6 +447,12 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 							Mnemonic::FMul
 						} else {
 							Mnemonic::Mul
+						}
+					} else if token.unwrap().kind == TokenKind::Mod {
+						if is_float_expr {
+							Mnemonic::FMod
+						} else {
+							Mnemonic::Mod
 						}
 					} else if is_float_expr {
 						Mnemonic::FDiv

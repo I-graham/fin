@@ -187,6 +187,8 @@ pub(crate) enum Mnemonic {
 	//Add registers[args[1]] and registers[args[2]] into registers[args[0]]
 	Sub,
 	//Subtract registers[args[2]] from registers[args[1]] into registers[args[0]]
+	Mod,
+	//Integer modulo registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Mul,
 	//Integer multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
 	Div,
@@ -195,6 +197,8 @@ pub(crate) enum Mnemonic {
 	//Float add registers[args[1]] and registers[args[2]] into registers[args[0]]
 	FSub,
 	//Float subtract registers[args[2]] from registers[args[1]] into registers[args[0]]
+	FMod,
+	//modulo registers[args[1]] by registers[args[2]] into registers[args[0]]
 	FMul,
 	//multiply registers[args[1]] by registers[args[2]] into registers[args[0]]
 	FDiv,
