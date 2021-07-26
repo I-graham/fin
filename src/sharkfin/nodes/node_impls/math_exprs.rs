@@ -194,7 +194,9 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 				Mul | Div | Mod => {
 					let (node2_end, term2) = Factor::construct(context, node_end + 1)?;
 					match term2 {
-						Factor::Parenthesized(mut sum) if sum.addends.len() == 1 => {
+						Factor::Parenthesized(mut sum)
+							if sum.addends.len() == 1 && token.kind == Mul =>
+						{
 							let mut factors = sum.addends.remove(0).0.factors;
 							std::mem::swap(&mut factors, &mut ret.factors);
 							ret.factors.extend(factors);
