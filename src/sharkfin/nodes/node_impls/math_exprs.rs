@@ -126,7 +126,7 @@ impl<'a> ASTNode<'a> for Sum<'a> {
 		Some(acc)
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		let is_float_expr = self.output_type(context).unwrap() == VarType::Float;
 
 		let convert = |var, context: &mut CompileContext<'a>| {
@@ -148,9 +148,15 @@ impl<'a> ASTNode<'a> for Sum<'a> {
 		self.addends[0].0.generate_source(context);
 		let opvar = self.output_var().unwrap();
 		convert(opvar, context);
-		for (addend, token) in &self.addends[1..] {
-			addend.generate_source(context);
-			let next = addend.output_var().unwrap();
+		for (addend, token) in &mut self.addends[1..] {
+			let next = if addend.factors.len() == 1 {
+				addend.factors[0].0.generate_source(context);
+				addend.factors[0].0.output_var().unwrap()
+			} else {
+				addend.generate_source(context);
+				addend.output_var().unwrap()
+			};
+
 			let [acc, data] = context
 				.scope
 				.place_vars(&[(opvar, false), (next, false)], &mut context.program.code);
@@ -379,10 +385,10 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 		self.output_var()
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		let is_float_expr = self.output_type(context).unwrap() == VarType::Float;
 
-		let first = &self.factors[0].0;
+		let first = &mut self.factors[0].0;
 		first.generate_source(context);
 		let use_acc = matches!(first, Factor::Var(_));
 		let opvar = if use_acc {
@@ -417,7 +423,7 @@ impl<'a> ASTNode<'a> for Multiplication<'a> {
 			first.output_var().unwrap()
 		};
 
-		for (factor, token) in &self.factors[1..] {
+		for (factor, token) in &mut self.factors[1..] {
 			factor.generate_source(context);
 			let is_var = matches!(factor, Factor::Var(_));
 			let next = factor.output_var().unwrap();
@@ -479,10 +485,19 @@ impl<'a> ASTNode<'a> for Factor<'a> {
 			Ok((node_end, Self::LiteralFloat(lit)))
 		} else if let Ok((node_end, lit)) = LiteralInt::construct(context, start) {
 			Ok((node_end, Self::LiteralInt(lit)))
+		} else if let Ok((node_end, call)) = FunctionCall::construct(context, start) {
+			if call.opvar == None {
+				context.error.err_at_token(
+					"Function does not return value.",
+					"Function has no return value, so it cannot be used in an expression.",
+					call.func_name,
+				);
+			}
+			Ok((node_end, Self::FunctionCall(call)))
 		} else if let Ok((node_end, var)) = AccessVar::construct(context, start) {
 			Ok((node_end, Self::Var(var)))
 		} else if context.tokens.len() > 2 && context.tokens[start].kind == LParen {
-			let (node_end, sum) = Expr::construct(context, start + 1)?;
+			let (node_end, sum) = MathExpr::construct(context, start + 1)?;
 			let _ = tokens_match_kinds(&context.tokens[node_end..], &[RParen])?;
 			Ok((node_end + 1, Self::Parenthesized(sum)))
 		} else {
@@ -495,6 +510,7 @@ impl<'a> ASTNode<'a> for Factor<'a> {
 			Self::LiteralInt(lit) => lit.precompute(),
 			Self::LiteralFloat(float) => float.precompute(),
 			Self::Parenthesized(sum) => sum.precompute(),
+			Self::FunctionCall(call) => call.precompute(),
 			Self::Var(_) => None,
 		}
 	}
@@ -505,6 +521,7 @@ impl<'a> ASTNode<'a> for Factor<'a> {
 			Self::LiteralInt(lit) => lit.record_var_usage(context),
 			Self::LiteralFloat(float) => float.record_var_usage(context),
 			Self::Parenthesized(sum) => sum.record_var_usage(context),
+			Self::FunctionCall(call) => call.record_var_usage(context),
 		}
 	}
 
@@ -514,6 +531,7 @@ impl<'a> ASTNode<'a> for Factor<'a> {
 			Self::LiteralInt(lit) => lit.output_var(),
 			Self::LiteralFloat(float) => float.output_var(),
 			Self::Parenthesized(sum) => sum.output_var(),
+			Self::FunctionCall(call) => call.output_var(),
 		}
 	}
 
@@ -523,15 +541,17 @@ impl<'a> ASTNode<'a> for Factor<'a> {
 			Self::LiteralInt(lit) => lit.output_type(context),
 			Self::LiteralFloat(float) => float.output_type(context),
 			Self::Parenthesized(sum) => sum.output_type(context),
+			Self::FunctionCall(call) => call.output_type(context),
 		}
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		match self {
 			Self::Var(var) => var.generate_source(context),
 			Self::LiteralInt(lit) => lit.generate_source(context),
 			Self::LiteralFloat(float) => float.generate_source(context),
 			Self::Parenthesized(sum) => sum.generate_source(context),
+			Self::FunctionCall(call) => call.generate_source(context),
 		}
 	}
 }
@@ -582,7 +602,7 @@ impl<'a> ASTNode<'a> for LiteralFloat<'a> {
 		Some(VarType::Float)
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		let bits = self.value.to_bits();
 		if abbreviations::fits_in_const_inst(bits) {
 			let [start] = context
@@ -648,7 +668,7 @@ impl<'a> ASTNode<'a> for LiteralInt<'a> {
 		Some(VarType::Int)
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		if abbreviations::fits_in_const_inst(self.value) {
 			let [start] = context
 				.scope

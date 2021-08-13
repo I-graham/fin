@@ -1,8 +1,9 @@
-mod node_impls;
-mod node_structs;
+pub(crate) mod node_impls;
+pub(crate) mod node_structs;
 pub(crate) use node_structs::ProgramRoot;
 
 use super::lexer::*;
+use super::types::*;
 use super::vars::*;
 use super::CompileContext;
 use crate::bytecode::*;
@@ -17,7 +18,7 @@ pub(super) trait ASTNode<'a>: Debug + Sized {
 		None
 	}
 
-	fn output_type(&self, context: &CompileContext) -> Option<VarType> {
+	fn output_type(&self, context: &CompileContext<'a>) -> Option<VarType> {
 		self.output_var()
 			.map(|id| context.scope.var_type(id).unwrap())
 	}
@@ -29,5 +30,5 @@ pub(super) trait ASTNode<'a>: Debug + Sized {
 
 	fn record_var_usage(&mut self, context: &mut CompileContext<'a>) -> Option<VariableID<'a>>;
 
-	fn generate_source(&self, context: &mut CompileContext<'a>);
+	fn generate_source(&mut self, context: &mut CompileContext<'a>);
 }

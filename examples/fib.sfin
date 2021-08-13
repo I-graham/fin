@@ -1,0 +1,14 @@
+func main() {
+	let Int j = 0;
+	while j < 1000 {
+		let Int i = 0;
+		let Int a = 0;
+		let Int b = 1;
+		while i < 50 {
+			b = a + b;
+			a = b-a;
+			i=i+1;
+		}
+		j=j+1;
+	}
+}

@@ -1,4 +1,3 @@
-use super::abbreviations;
 use super::bytecode::*;
 use super::runtime_error::*;
 use std::io;
@@ -7,7 +6,7 @@ pub const REGISTERS: u8 = 16;
 
 #[derive(Default)]
 pub(crate) struct FinProgram<'a> {
-	pub(crate) program_data: Vec<Word>,
+	pub(crate) data: Vec<Word>,
 	pub(crate) code: Vec<Instruction>,
 	pub(crate) debug_info: Option<DebugInfo<'a>>,
 }
@@ -36,7 +35,7 @@ impl<'a> FinProgram<'a> {
 			})
 			.collect::<Vec<_>>();
 		let data_size = slice_to_int(read_n_bytes(8)) as usize;
-		let program_data = read_n_bytes(data_size * 8)
+		let data = read_n_bytes(data_size * 8)
 			.chunks_exact(8)
 			.map(slice_to_int)
 			.collect::<Vec<_>>();
@@ -46,7 +45,7 @@ impl<'a> FinProgram<'a> {
 			.map(|bytes| Instruction::from_raw(bytes[..].try_into().unwrap()))
 			.collect::<Vec<_>>();
 		Self {
-			program_data,
+			data,
 			code,
 			debug_info: Some(DebugInfo {
 				source,
@@ -57,7 +56,7 @@ impl<'a> FinProgram<'a> {
 
 	pub(crate) fn execute(&self, debug: bool) {
 		let mut data = Data {
-			program_data: self.program_data.clone(),
+			data: self.data.clone(),
 			..Default::default()
 		};
 
@@ -77,78 +76,82 @@ impl<'a> FinProgram<'a> {
 					instruction.as_string(),
 					&data
 				);
-				if ip < self.code.len() as Word - 1 {
-					loop {
-						use std::io::Write;
-						print!("> ");
-						io::stdout().flush().unwrap();
-						let mut raw_cmd = String::new();
-						io::stdin().read_line(&mut raw_cmd).unwrap();
-						let cmd = raw_cmd.trim();
-						if cmd == "exit" {
-							self.throw_error("Early exit", ip);
-						} else if cmd == "line" {
-							match &self.debug_info {
-								Some(debug) => {
-									let (line_no, line) = debug.line(ip);
-									println!("(line {}): | {}", line_no, line);
-								}
-								None => println!("No debug info."),
+				loop {
+					use std::io::Write;
+					print!("> ");
+					io::stdout().flush().unwrap();
+					let mut raw_cmd = String::new();
+					io::stdin().read_line(&mut raw_cmd).unwrap();
+					let cmd = raw_cmd.trim();
+					if cmd == "exit" {
+						self.throw_error("Early exit", ip);
+					} else if cmd == "line" {
+						match &self.debug_info {
+							Some(debug) => {
+								let (line_no, line) = debug.line(ip);
+								println!("(line {}): | {}", line_no, line);
 							}
-						} else if let Some(num) = cmd.strip_prefix("skip:") {
-							match num.parse::<i64>() {
-								Ok(dist) => {
-									data.regs.ip =
-										data.regs.ip.wrapping_add(dist.wrapping_sub(1) as Word)
-								}
-								Err(err) => println!("Unable to parse argument: `{:?}`", err),
-							}
-						} else if let Some(num) = cmd.strip_prefix("setbp:") {
-							match num.parse::<Word>() {
-								Ok(bp) => {
-									breakpoint = Some(bp);
-								}
-								Err(err) => println!("Unable to parse argument: `{:?}`", err),
-							}
-						} else if cmd == "unsetbp" {
-							breakpoint = None;
-						} else if let Some(num) = cmd.strip_prefix("fword:") {
-							match num.parse::<u8>() {
-								Ok(reg) => {
-									println!(
-										"#{}: {}",
-										reg,
-										FWord::from_bits(data.regs.gp[reg as usize])
-									);
-								}
-								Err(err) => println!("Unable to parse argument: `{:?}`", err),
-							}
-						} else if let Some(num) = cmd.strip_prefix("word:") {
-							match num.parse::<u8>() {
-								Ok(reg) => {
-									println!("#{}: {}", reg, data.regs.gp[reg as usize]);
-								}
-								Err(err) => println!("Unable to parse argument: `{:?}`", err),
-							}
-						} else if let Some(num) = cmd.strip_prefix("iword:") {
-							match num.parse::<u8>() {
-								Ok(reg) => {
-									println!("#{}: {}", reg, data.regs.gp[reg as usize] as i64);
-								}
-								Err(err) => println!("Unable to parse argument: `{:?}`", err),
-							}
-						} else if cmd.is_empty() {
-							println!();
-							break;
-						} else {
-							println!("Unknown Command `{}`", cmd);
+							None => println!("No debug info."),
 						}
+					} else if let Some(num) = cmd.strip_prefix("skip:") {
+						match num.parse::<i64>() {
+							Ok(dist) => {
+								data.regs.ip =
+									data.regs.ip.wrapping_add(dist.wrapping_sub(1) as Word)
+							}
+							Err(err) => println!("Unable to parse argument: `{:?}`", err),
+						}
+					} else if let Some(num) = cmd.strip_prefix("setbp:") {
+						match num.parse::<Word>() {
+							Ok(bp) => {
+								breakpoint = Some(bp);
+							}
+							Err(err) => println!("Unable to parse argument: `{:?}`", err),
+						}
+					} else if cmd == "unsetbp" {
+						breakpoint = None;
+					} else if let Some(num) = cmd.strip_prefix("fword:") {
+						match num.parse::<u8>() {
+							Ok(reg) => {
+								println!(
+									"#{}: {}",
+									reg,
+									FWord::from_bits(data.regs.gp[reg as usize])
+								);
+							}
+							Err(err) => println!("Unable to parse argument: `{:?}`", err),
+						}
+					} else if let Some(num) = cmd.strip_prefix("word:") {
+						match num.parse::<u8>() {
+							Ok(reg) => {
+								println!("#{}: {}", reg, data.regs.gp[reg as usize]);
+							}
+							Err(err) => println!("Unable to parse argument: `{:?}`", err),
+						}
+					} else if let Some(num) = cmd.strip_prefix("iword:") {
+						match num.parse::<u8>() {
+							Ok(reg) => {
+								println!("#{}: {}", reg, data.regs.gp[reg as usize] as i64);
+							}
+							Err(err) => println!("Unable to parse argument: `{:?}`", err),
+						}
+					} else if cmd.is_empty() {
+						println!();
+						break;
+					} else {
+						println!("Unknown Command `{}`", cmd);
 					}
 				}
 			}
+
 			if let Err(msg) = data.exec_instruction(instruction) {
+				if msg == "Halt" {
+					break;
+				}
+				
 				self.throw_error(msg, ip);
 			}
+
 			data.regs.ip = data.regs.ip.wrapping_add(1);
 		}
 	}
@@ -157,7 +160,7 @@ impl<'a> FinProgram<'a> {
 		use std::str::FromStr;
 		let (data, code) = input.split_at(input.find(']').expect("Invalid program data format"));
 		Self {
-			program_data: data
+			data: data
 				.split(',')
 				.filter_map(|num| {
 					if !num.is_empty() {
@@ -188,7 +191,7 @@ impl<'a> FinProgram<'a> {
 
 	pub(crate) fn dissassemble(&self) -> String {
 		let mut output = String::from("[\n");
-		for word in &self.program_data {
+		for word in &self.data {
 			output += &word.to_string();
 			output += ",\n";
 		}
@@ -225,8 +228,8 @@ impl<'a> FinProgram<'a> {
 			push_word(&mut output, 0);
 			push_word(&mut output, 0);
 		}
-		push_word(&mut output, self.program_data.len() as Word);
-		for word in &self.program_data {
+		push_word(&mut output, self.data.len() as Word);
+		for word in &self.data {
 			push_word(&mut output, *word);
 		}
 		push_word(&mut output, self.code.len() as Word);
@@ -234,67 +237,6 @@ impl<'a> FinProgram<'a> {
 			push_word(&mut output, inst.as_raw());
 		}
 		output
-	}
-
-	pub(crate) fn post_process(&mut self) {
-		let get_jmp_dest = |inst: Instruction, ip: usize| {
-			if inst.args[0] != 0 {
-				inst.args_as_const().wrapping_neg()
-			} else {
-				inst.args_as_const()
-			}
-			.wrapping_add(1)
-			.wrapping_add(ip as Word)
-		};
-
-		let elim_inst = |inst: Instruction| {
-			inst.condition == Condition::Nev
-				|| inst.mnemonic == Mnemonic::RelJmp && inst.args == [0; 6]
-				|| inst.mnemonic == Mnemonic::Nop
-		};
-
-		let mut modified_code = true;
-		while modified_code {
-			modified_code = false;
-			let mut ip = 0;
-			while ip < self.code.len() {
-				let inst = self.code[ip];
-
-				if elim_inst(inst) {
-					modified_code = true;
-					self.code.remove(ip);
-					for early in 0..self.code.len() {
-						let early_inst = self.code[early];
-						let inst_moved = early >= ip;
-						let old_early = early + inst_moved as usize;
-						let old_dest = get_jmp_dest(early_inst, old_early);
-						let dest_moved = old_dest > ip as Word;
-						if early_inst.mnemonic == Mnemonic::RelJmp && inst_moved != dest_moved {
-							let new_dest = if dest_moved { old_dest - 1 } else { old_dest };
-							abbreviations::branch(early as Word, new_dest, &mut self.code);
-						}
-					}
-				} else {
-					ip += 1;
-				}
-			}
-		}
-
-		for ip in 0..self.code.len() {
-			let inst = self.code[ip];
-			if inst.mnemonic == Mnemonic::RelJmp {
-				let mut jmp_dest = get_jmp_dest(inst, ip);
-				let mut jmp_dest_inst = self.code[jmp_dest as usize];
-				while jmp_dest_inst.mnemonic == Mnemonic::RelJmp
-					&& jmp_dest != ip as Word
-					&& inst.condition.implies(jmp_dest_inst.condition)
-				{
-					jmp_dest = get_jmp_dest(jmp_dest_inst, jmp_dest as usize);
-					abbreviations::branch(ip as Word, jmp_dest, &mut self.code);
-					jmp_dest_inst = self.code[jmp_dest as usize];
-				}
-			}
-		}
 	}
 
 	fn throw_error(&self, msg: &str, ip: Word) -> ! {
@@ -308,7 +250,7 @@ impl<'a> FinProgram<'a> {
 
 #[derive(Debug, Default)]
 struct Data {
-	pub(crate) program_data: Vec<Word>,
+	pub(crate) data: Vec<Word>,
 	pub(crate) stack: Vec<Word>,
 	pub(crate) regs: RegisterData,
 }
@@ -322,13 +264,36 @@ impl Data {
 				Nop => (),
 				Dbg => println!("{:?}\n{:?}", &self.regs, &self),
 				Inc => *self.regs.write_gp(args[0]) += 1,
-				Load => *self.regs.write_gp(args[1]) = self.read_addr(self.regs.read_gp(args[0])),
-				StkLd => {
-					let addr = self.regs.bp + inst.args_as_const() as Word;
-					*self.regs.write_gp(args[0]) = self.read_addr(addr);
+				Call => {
+					let saved_state = &self.regs.gp[args[0] as usize..];
+					self.stack.reserve(saved_state.len() + 2);
+					self.stack.extend(saved_state);
+					self.stack.extend(&[self.regs.ip, self.regs.bp]);
+					self.regs.ip = self.data[inst.args_as_const() as usize];
+					self.regs.bp = self.stack.len() as Word;
+				}
+				Ret => {
+					let restoring_state = &mut self.regs.gp[args[0] as usize..];
+
+					if self.stack.len() < 2 + restoring_state.len() {
+						return Err("Insufficient data on stack.");
+					}
+
+					self.stack.truncate(self.regs.bp as usize);
+					self.regs.bp = self.stack.pop().unwrap();
+					self.regs.ip = self.stack.pop().unwrap();
+
+					for mut_reg in restoring_state.iter_mut().rev() {
+						*mut_reg = self.stack.pop().unwrap();
+					}
 				}
 				Const => {
 					*self.regs.write_gp(args[0]) = inst.args_as_const() as Word;
+				}
+				Load => *self.regs.write_gp(args[1]) = self.read_addr(self.regs.read_gp(args[0])),
+				StkLd => {
+					let addr = self.regs.bp.wrapping_add(inst.args_as_const() as Word);
+					*self.regs.write_gp(args[0]) = self.read_addr(addr);
 				}
 				Store => *self.write_addr(self.regs.read_gp(args[1])) = self.regs.read_gp(args[0]),
 				StkStr => {
@@ -403,11 +368,7 @@ impl Data {
 				}
 				RelJmp => {
 					let const_val = inst.args_as_const() as u64;
-					self.regs.ip = self.regs.ip.wrapping_add(if args[0] != 0 {
-						const_val.wrapping_neg()
-					} else {
-						const_val
-					});
+					self.regs.ip = self.regs.ip.wrapping_add(const_val);
 				}
 				FToI => {
 					let [f] = self.regs.fmap_to_gps(&[args[0]]);
@@ -418,7 +379,7 @@ impl Data {
 					*self.regs.write_gp(args[0]) = (i as FWord).to_bits();
 				}
 				Hlt => {
-					//std::process::exit(self.regs.read_gp(args[0]) as i32);
+					return Err("Halt");
 				}
 			}
 		}
@@ -426,12 +387,12 @@ impl Data {
 	}
 
 	fn read_addr(&self, address: Word) -> Word {
-		//If the first bit is a 1, then the value is fetched from program_data
+		//If the first bit is a 1, then the value is fetched from data
 		let program_data_bit = address & (1 << (Word::BITS - 1));
 
 		if program_data_bit != 0 {
-			assert!(address < self.program_data.len() as Word);
-			self.program_data[(address & !program_data_bit) as usize]
+			assert!(address < self.data.len() as Word);
+			self.data[(address & !program_data_bit) as usize]
 		} else {
 			assert!(address < self.stack.len() as Word);
 			self.stack[address as usize]
@@ -439,13 +400,13 @@ impl Data {
 	}
 
 	fn write_addr(&mut self, address: Word) -> &mut Word {
-		//If the first bit is a 1, then the value written to is in program_data
+		//If the first bit is a 1, then the value written to is in data
 		const BIT_MASK: Word = 1 << (Word::BITS - 1);
 		let program_data_bit = address & BIT_MASK;
 
 		if program_data_bit != 0 {
-			assert!(address < self.program_data.len() as Word);
-			&mut self.program_data[(address & !BIT_MASK) as usize]
+			assert!(address < self.data.len() as Word);
+			&mut self.data[(address & !BIT_MASK) as usize]
 		} else {
 			if address >= self.stack.len() as Word {
 				self.stack.resize((address + 1) as usize, 0);

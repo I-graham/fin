@@ -13,8 +13,16 @@ pub(crate) struct Instruction {
 
 impl Instruction {
 	pub(crate) fn args_as_const(&self) -> Word {
+		const NEG_MASK: u8 = 1 << 7;
+		let neg = self.args[1] & NEG_MASK;
+		let shift = (self.args[1] & !NEG_MASK) as Word;
 		use std::convert::TryInto;
-		(u32::from_le_bytes(self.args[2..6].try_into().unwrap()) as Word) << (self.args[1] as Word)
+		let unsigned = (u32::from_le_bytes(self.args[2..6].try_into().unwrap()) as Word) << shift;
+		if neg != 0 {
+			!unsigned
+		} else {
+			unsigned
+		}
 	}
 
 	pub(crate) fn from_raw(instruction: &[u8; 8]) -> Self {
@@ -165,20 +173,35 @@ pub(crate) enum Mnemonic {
 	//Does nothing: no-op
 	Dbg,
 	//Print debug info
+	Call,
+	//Call function
+	//procedure:
+	//  store registers[args[0]..] on stack
+	//	push ip onto stack
+	//	push base pointer onto stack
+	//	goto data[args[2..6] as const]
+	Ret,
+	//Call function
+	//procedure:
+	//	pop base pointer from stack
+	//	pop ip from stack
+	//	read registers[args[0]..] from stack
+	//  deallocate memory
+
 	Inc,
 	//Increment value in registers[args[0]]
 	Const,
 	//Load args[2..6] as little endian u32, left shifted by args[1] into registers[args[0]]
 	Load,
-	//registers[args[1]] = data[registers[args[0]]]
+	//registers[args[1]] = stack[registers[args[0]]]
 	Store,
-	//data[registers[args[1]]] = registers[args[0]]
+	//stack[registers[args[1]]] = registers[args[0]]
 	StkLd,
-	//registers[args[0]] = data[args[2..6] as const + base pointer]
+	//registers[args[0]] = stack[args[2..6] as const + base pointer]
 	StkStr,
-	//data[args[2..6] as const + base pointer] = registers[args[0]]
+	//stack[args[2..6] as const + base pointer] = registers[args[0]]
 	Puts,
-	//Print string stored at data[register[args[0]]]
+	//Print string stored at stack[register[args[0]]]
 	Or,
 	//Or registers[args[1]] and registers[args[2]] into registers[args[0]]
 	Xor,
@@ -208,8 +231,7 @@ pub(crate) enum Mnemonic {
 	Cmp,
 	//Update condition register
 	RelJmp,
-	//Load args[2..6] as little endian u32, left shifted by args[1], negated if args[0] != 0,
-	//wrapping adds value to instruction pointer.
+	//wrapping adds const args[2..6] to instruction pointer.
 	FToI,
 	//Convert float value in args[1] to int, stores output in args[0],
 	IToF,

@@ -19,7 +19,7 @@ pub(crate) enum Boolean<'a> {
 
 #[derive(Debug)]
 pub(crate) struct Comparison<'a> {
-	pub args: (Expr<'a>, Expr<'a>),
+	pub args: (MathExpr<'a>, MathExpr<'a>),
 	pub ty: VarType,
 	pub op: Token<'a>,
 }

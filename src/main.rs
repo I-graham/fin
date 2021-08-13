@@ -1,4 +1,3 @@
-mod abbreviations;
 mod bytecode;
 mod interpreter;
 mod runtime_error;

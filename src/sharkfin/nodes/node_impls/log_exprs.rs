@@ -36,9 +36,9 @@ impl<'a> ASTNode<'a> for OrExpr<'a> {
 		None
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		let mut early_exits = vec![];
-		for and in &self.ands {
+		for and in &mut self.ands {
 			and.generate_source(context);
 			context.code().pop().unwrap();
 			early_exits.push(context.code().len() - 1);
@@ -106,9 +106,9 @@ impl<'a> ASTNode<'a> for AndExpr<'a> {
 		None
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		let mut early_exits = vec![];
-		for boolean in &self.bools {
+		for boolean in &mut self.bools {
 			boolean.generate_source(context);
 			early_exits.push(context.code().len() - 1);
 		}
@@ -140,7 +140,7 @@ impl<'a> ASTNode<'a> for Boolean<'a> {
 		}
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		match self {
 			Self::Comparison(comp) => {
 				comp.generate_source(context);
@@ -173,7 +173,7 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 		static COMP_OPS: [TokenKind; 6] = [Less, Greater, LessEq, GreaterEq, Eq, NEq];
 		let err_ret = Err((*context.tokens.last().unwrap(), &COMP_OPS[..]));
 
-		let (arg_a_end, arg_a) = Expr::construct(context, start)?;
+		let (arg_a_end, arg_a) = MathExpr::construct(context, start)?;
 		if context.tokens.len() <= arg_a_end {
 			return err_ret;
 		}
@@ -181,7 +181,7 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 		if !COMP_OPS.contains(&op.kind) {
 			return err_ret;
 		}
-		let (arg_b_end, arg_b) = Expr::construct(context, arg_a_end + 1)?;
+		let (arg_b_end, arg_b) = MathExpr::construct(context, arg_a_end + 1)?;
 
 		let ty = arg_a.output_type(context).unwrap();
 		let ty2 = arg_b.output_type(context).unwrap();
@@ -227,7 +227,7 @@ impl<'a> ASTNode<'a> for Comparison<'a> {
 		None
 	}
 
-	fn generate_source(&self, context: &mut CompileContext<'a>) {
+	fn generate_source(&mut self, context: &mut CompileContext<'a>) {
 		self.args.0.generate_source(context);
 		self.args.1.generate_source(context);
 		let a = self.args.0.output_var().unwrap();

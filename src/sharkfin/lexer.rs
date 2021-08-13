@@ -17,9 +17,37 @@ impl<'a> Lexer<'a> {
 
 	pub(crate) fn advance_token(&mut self) -> Result<Token<'a>, String> {
 		use TokenKind::*;
+		//Tokens with an exact one-to-one correspondance with strings,
+		//Ex. Semicolon <=> ";", Div <=> "/", etc...
 		const EXACT_TOKENS: &[TokenKind] = &[
-			Semicolon, Plus, Minus, Mod, Mul, Div, LParen, RParen, LCurly, RCurly, NEq, Eq, Or, And,
-			Not, Less, Greater, LessEq, GreaterEq, Assign, Let, Func, Else, If, While,
+			Semicolon,
+			Comma,
+			Return,
+			ReturnArrow,
+			Plus,
+			Minus,
+			Mod,
+			Mul,
+			Div,
+			LParen,
+			RParen,
+			LCurly,
+			RCurly,
+			NEq,
+			Eq,
+			Or,
+			And,
+			Not,
+			GreaterEq,
+			Greater,
+			LessEq,
+			Less,
+			Assign,
+			Let,
+			Func,
+			Else,
+			If,
+			While,
 		];
 
 		for &kind in EXACT_TOKENS {
@@ -122,6 +150,7 @@ pub(crate) enum TokenKind {
 	Float,
 	Whitespace,
 	Eof,
+	ReturnArrow,
 	Assign,
 	Plus,
 	Minus,
@@ -137,6 +166,7 @@ pub(crate) enum TokenKind {
 	Or,
 	And,
 	Not,
+	Comma,
 	LParen,
 	RParen,
 	LCurly,
@@ -146,6 +176,7 @@ pub(crate) enum TokenKind {
 	While,
 	Func,
 	Let,
+	Return,
 	Semicolon,
 }
 
@@ -159,6 +190,7 @@ impl TokenKind {
 			Float => "{float}",
 			Whitespace => "{whitespace}",
 			Eof => "{end of file}",
+			ReturnArrow => "->",
 			Assign => "=",
 			Plus => "+",
 			Minus => "-",
@@ -174,6 +206,7 @@ impl TokenKind {
 			Or => "||",
 			And => "&&",
 			Not => "!",
+			Comma => ",",
 			LParen => "(",
 			RParen => ")",
 			LCurly => "{",
@@ -183,6 +216,7 @@ impl TokenKind {
 			While => "while",
 			Func => "func",
 			Let => "let",
+			Return => "return",
 			Semicolon => ";",
 		}
 	}

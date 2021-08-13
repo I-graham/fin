@@ -1,0 +1,14 @@
+func factorial(Int n) -> Int {
+	if n <= 1 {
+		return 1;
+	} else {
+		return n * factorial(n-1);
+	}
+}
+
+func main() {
+	let Int i = 0;
+	while i < 1000000 {
+		let Int output = factorial(20);
+		i =i+1;}
+}

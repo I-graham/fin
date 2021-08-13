@@ -1,7 +1,7 @@
 use super::*;
-use crate::abbreviations;
+use crate::sharkfin::abbreviations;
 
-pub(crate) type Expr<'a> = Sum<'a>;
+pub(crate) type MathExpr<'a> = Sum<'a>;
 
 #[derive(Debug)]
 pub(crate) struct Sum<'a> {
@@ -19,7 +19,8 @@ pub(crate) enum Factor<'a> {
 	Var(AccessVar<'a>),
 	LiteralFloat(LiteralFloat<'a>),
 	LiteralInt(LiteralInt<'a>),
-	Parenthesized(Expr<'a>),
+	Parenthesized(MathExpr<'a>),
+	FunctionCall(FunctionCall<'a>),
 }
 
 #[derive(Debug)]

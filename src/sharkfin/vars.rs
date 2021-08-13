@@ -1,14 +1,17 @@
-use crate::abbreviations;
+use super::abbreviations;
+use super::types::*;
 use crate::bytecode::*;
 use crate::interpreter::*;
 use fnv::FnvHashMap;
 use std::ops::Range;
 
+pub(crate) type Recorder<'a> = FnvHashMap<VariableID<'a>, bool>;
+
 type RegisterMap<'a> = [Option<VariableID<'a>>; REGISTERS as usize];
 type StackMap<'a> = Vec<Option<VariableID<'a>>>;
 
-#[derive(Default)]
-pub(super) struct FunctionScope<'a> {
+#[derive(Default, Debug)]
+pub(crate) struct FunctionScope<'a> {
 	id_counter: usize,
 	//usize used to order intervals
 	//bool is true at last usage / if variable has been used before (false on creation, true elsewhere)
@@ -20,7 +23,8 @@ pub(super) struct FunctionScope<'a> {
 	free_stack_locs: Vec<usize>,
 	saved_states: Vec<(RegisterMap<'a>, StackMap<'a>)>,
 	//bool is true if variable is new
-	recorders: Vec<FnvHashMap<VariableID<'a>, bool>>,
+	recorders: Vec<Recorder<'a>>,
+	pub return_type: Option<VarType>,
 }
 
 impl<'a> FunctionScope<'a> {
@@ -116,26 +120,7 @@ impl<'a> FunctionScope<'a> {
 	) -> [u8; N] {
 		debug_assert!(N < REGISTERS.into());
 
-		for (id, _) in ids.iter() {
-			let base_id = self.get_base(*id).unwrap();
-			//erase vars which died before this one was born, AKA vars which will never be used again
-			for (&var, interval) in self.intervals.1.iter() {
-				if interval.end <= self.intervals.1[&base_id].start
-					&& !ids.iter().any(|&(v, _)| self.get_base(v).unwrap() == var)
-				{
-					if let Some(dead_var) = self.variables.remove(&var) {
-						self.synonyms.retain(|_, v| *v != var);
-						if let Location::Register(reg) = dead_var.location {
-							self.registers[reg as usize] = None;
-						}
-						if let Some(addr) = dead_var.stack_loc {
-							self.stack[addr] = None;
-							self.free_stack_locs.push(addr);
-						}
-					}
-				}
-			}
-		}
+		self.kill_older(ids);
 
 		let variables = &mut self.variables;
 		self.intervals
@@ -195,7 +180,7 @@ impl<'a> FunctionScope<'a> {
 				.1
 				.iter()
 				.filter_map(|(&var, lifetime)| {
-					if !ids.iter().any(|&(v, _)| self.get_base(v).unwrap() == var)
+					if ids.iter().all(|&(v, _)| self.get_base(v).unwrap() != var)
 						&& registers.contains(&Some(var))
 					{
 						Some((var, lifetime.end))
@@ -227,11 +212,99 @@ impl<'a> FunctionScope<'a> {
 		opregs
 	}
 
-	pub fn cleanup(&mut self) {
-		let intervals = &mut self.intervals.1;
-		self.variables.retain(|id, _| intervals[id].end > 0);
-		let variables = &mut self.variables;
-		self.synonyms.retain(|_, v| variables.contains_key(&v));
+	pub fn place_args(&mut self, ids: &[(VariableID<'a>, bool)], out: &mut Vec<Instruction>) {
+		let id_len = ids.len();
+		debug_assert!(id_len < REGISTERS as usize);
+
+		self.kill_older(ids);
+
+		let regs = self.registers;
+		for var in regs[id_len..].iter().filter_map(|&v| v) {
+			self.spill_var(var, out);
+		}
+
+		for (reg, &(var, copy)) in ids.iter().enumerate() {
+			let base = self.get_base(var).unwrap();
+			if let Some(occupying_var) = self.registers[reg] {
+				let occ_base = self.get_base(occupying_var).unwrap();
+				if copy || occ_base != base {
+					let free_slot = self.registers[id_len..]
+						.iter()
+						.enumerate()
+						.find_map(|(i, slot)| slot.and_then(|_| Some(i + id_len)));
+
+					match free_slot {
+						Some(slot) => self.load_var(occ_base, slot as u8, out),
+						None => self.spill_var(occ_base, out),
+					}
+				}
+			}
+
+			debug_assert!(self.registers[reg]
+				.filter(|&occ| occ != var || copy)
+				.is_none());
+
+			if copy {
+				let old_loc = self.variables[&base].location;
+
+				let free_slot = match old_loc {
+					Location::Register(old_reg) if old_reg > id_len as u8 => Some(old_reg),
+					_ => self.registers[id_len..]
+						.iter()
+						.enumerate()
+						.find_map(|(i, slot)| Some(i as u8).filter(|_| slot.is_none())),
+				};
+
+				match free_slot {
+					Some(slot) => {
+						self.load_var(base, slot, out);
+						if let Location::Register(old_reg) = old_loc {
+							if old_reg != reg as u8 {
+								out.push(Instruction {
+									mnemonic: Mnemonic::Mov,
+									args: [old_reg, reg as u8, 0, 0, 0, 0],
+									..Default::default()
+								});
+							}
+						} else {
+							out.push(Instruction {
+								mnemonic: Mnemonic::Mov,
+								args: [slot, reg as u8, 0, 0, 0, 0],
+								..Default::default()
+							});
+						}
+					}
+
+					None => {
+						self.spill_var(base, out);
+						match old_loc {
+							Location::Register(old_reg) => {
+								if old_reg != reg as u8 {
+									out.push(Instruction {
+										mnemonic: Mnemonic::Mov,
+										args: [old_reg, reg as u8, 0, 0, 0, 0],
+										..Default::default()
+									});
+								}
+							}
+							Location::Stack(addr) => {
+								debug_assert!(abbreviations::fits_in_const_inst(addr as Word));
+								let [shift, a, b, c, d] =
+									abbreviations::num_as_const_bytes(addr as Word);
+								out.extend(&[Instruction {
+									condition: Condition::Al,
+									mnemonic: Mnemonic::StkLd,
+									args: [reg as u8, shift, a, b, c, d],
+								}]);
+							}
+							_ => (),
+						}
+					}
+				}
+			} else {
+				self.load_var(base, reg as u8, out);
+			}
+		}
 	}
 
 	pub fn var_in_scope(&self, var_id: VariableID<'a>) -> bool {
@@ -349,6 +422,31 @@ impl<'a> FunctionScope<'a> {
 		}
 	}
 
+	pub fn kill_older(&mut self, used_ids: &[(VariableID<'a>, bool)]) {
+		for (id, _) in used_ids.iter() {
+			let base_id = self.get_base(*id).unwrap();
+			//erase vars which died before this one was born, AKA vars which will never be used again
+			for (&var, interval) in self.intervals.1.iter() {
+				if interval.end <= self.intervals.1[&base_id].start
+					&& used_ids
+						.iter()
+						.all(|&(v, _)| self.get_base(v).unwrap() != var)
+				{
+					if let Some(dead_var) = self.variables.remove(&var) {
+						self.synonyms.retain(|_, v| *v != var);
+						if let Location::Register(reg) = dead_var.location {
+							self.registers[reg as usize] = None;
+						}
+						if let Some(addr) = dead_var.stack_loc {
+							self.stack[addr] = None;
+							self.free_stack_locs.push(addr);
+						}
+					}
+				}
+			}
+		}
+	}
+
 	pub fn kill_vars<'l, I: IntoIterator<Item = &'l VariableID<'a>>>(&mut self, ids: I)
 	where
 		'a: 'l,
@@ -425,8 +523,6 @@ impl<'a> FunctionScope<'a> {
 				mnemonic: Mnemonic::StkStr,
 				args: [reg, shift, a, b, c, d],
 			}]);
-		} else {
-			unreachable!();
 		}
 	}
 
@@ -465,10 +561,4 @@ pub enum Location {
 	Stack(Word),
 	//No location information is needed/available
 	Nowhere,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VarType {
-	Int,
-	Float,
 }
